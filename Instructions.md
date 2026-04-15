@@ -1,0 +1,8 @@
+- Code shall be for a CLAP plugin that sends MIDI CC commands on host playback.
+- Plugin sends midi cc commands once upon host playback.
+- Commands are automatable via CLAP parameters.
+- The `plugin` folder contains the CLAP plugin that will be the receiver of the CC commands. - The `m4a_engine.c` file and its `m4a_engine_cc` function. It switches on the CC commands we'll be sending. The plugin must be able to send these.
+- This plugin will use the same rendering pipeline as `../poryaaaa`, using Pugl as a backend for ImGUI, using a PuglTimer to re-render the GUI every 60 seconds. Any improvement of this code's architecture would be appreciated.
+- The code for the GUI backend is available in this repo.
+- You shall write tests and run them every iteration you make.
+- The human you're writing this code for doesn't understand C/C++.

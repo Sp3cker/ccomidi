@@ -1,0 +1,70 @@
+# Build directories
+/build/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# C/C++ build artifacts
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.i*
+*.ii
+*.s
+*.su
+*.idb
+*.pdb
+*.dSYM/
+
+# Coverage and profiling
+*.gcno
+*.gcda
+*.gcov
+*.profraw
+*.profdata
+
+# Logs and runtime files
+*.log
+*.pid
+*.seed
+*.stackdump
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Qt Creator
+*.pro.user
+*.pro.user.*
+
+# Visual Studio
+.vs/
+*.VC.db
+*.VC.opendb
+
+# Ninja
+.ninja_log
+.ninja_deps

@@ -13,26 +13,27 @@ namespace ccomidi {
 struct EditorState;
 
 struct UiRowSnapshot {
-    double enabled = 0.0;
-    double type = 0.0;
-    std::array<double, kMaxCommandFields> values = {};
+  double enabled = 0.0;
+  double type = 0.0;
+  std::array<double, kMaxCommandFields> values = {};
 };
 
 struct UiSnapshot {
-    double outputChannel = 0.0;
-    std::array<UiRowSnapshot, kMaxCommandRows> rows = {};
+  double outputChannel = 0.0;
+  std::array<UiRowSnapshot, kMaxCommandRows> rows = {};
 };
 
 struct Plugin {
-    clap_plugin_t clapPlugin = {};
-    const clap_host_t *host = nullptr;
-    std::mutex stateMutex = {};
-    SenderCore core = {};
-    bool active = false;
-    EditorState *editor = nullptr;
-    clap_id guiTimerId = CLAP_INVALID_ID;
-    bool pendingUiChannelChange = false;
-    std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
+  clap_plugin_t clapPlugin = {};
+  const clap_host_t *host = nullptr;
+  std::mutex stateMutex = {};
+  SenderCore core = {};
+  bool active = false;
+  EditorState *editor = nullptr;
+  clap_id guiTimerId = CLAP_INVALID_ID;
+  bool pendingUiChannelChange = false;
+  std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
+  bool pendingParamInfoRescan = false;
 };
 
 const char *command_type_name(CommandType type);

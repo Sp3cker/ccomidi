@@ -100,10 +100,19 @@ set_target_properties(ccomidi PROPERTIES
 )
 
 if(APPLE)
+    set_target_properties(ccomidi PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION "clap"
+    )
     target_link_libraries(ccomidi PRIVATE
         "-framework Cocoa"
         "-framework Metal"
         "-framework QuartzCore"
+    )
+    add_custom_command(TARGET ccomidi POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/Info.plist"
+            "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi>/Info.plist"
     )
 elseif(WIN32)
     target_link_libraries(ccomidi PRIVATE opengl32)

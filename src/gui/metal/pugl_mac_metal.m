@@ -1,25 +1,26 @@
-// pugl_mac_metal.m - Pugl Metal backend for macOS
+// pugl_mac_metal.m - Pugl Metal backend for macOS (outside the Pugl submodule)
 // SPDX-License-Identifier: ISC
 
+#include "pugl_mac_metal.h"
 #include "internal.h"
 #include "mac.h"
 #include "stub.h"
-#include "gui/metal/pugl_mac_metal.h"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+
+// --- PuglMetalView ---
 
 @interface PuglMetalView : NSView
 @end
 
 @implementation PuglMetalView {
 @public
-  PuglView         *puglview;
-  PuglMetalContext  metalCtx;
+  PuglView *puglview;
+  PuglMetalContext metalCtx;
 }
 
-- (id)initWithFrame:(NSRect)frame
-{
+- (id)initWithFrame:(NSRect)frame {
   self = [super initWithFrame:frame];
   if (self) {
     metalCtx.device = MTLCreateSystemDefaultDevice();
@@ -35,13 +36,11 @@
   return self;
 }
 
-- (BOOL)wantsUpdateLayer
-{
+- (BOOL)wantsUpdateLayer {
   return NO;
 }
 
-- (CALayer *)makeBackingLayer
-{
+- (CALayer *)makeBackingLayer {
   CAMetalLayer *const layer = [CAMetalLayer layer];
   layer.device = metalCtx.device;
   layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -53,8 +52,7 @@
   return layer;
 }
 
-- (void)dealloc
-{
+- (void)dealloc {
   [metalCtx.metalLayer release];
   [metalCtx.commandQueue release];
   [metalCtx.device release];
@@ -66,30 +64,34 @@
   [super dealloc];
 }
 
-- (void)resizeWithOldSuperviewSize:(NSSize)oldSize
-{
+- (void)resizeWithOldSuperviewSize:(NSSize)oldSize {
   PuglWrapperView *wrapper = (PuglWrapperView *)[self superview];
 
   [super resizeWithOldSuperviewSize:oldSize];
   [wrapper setReshaped];
 }
 
-- (BOOL)acceptsFirstMouse:(NSEvent *)event
-{
+- (void)setFrameSize:(NSSize)newSize {
+  [super setFrameSize:newSize];
+}
+/* Tells AppKit to deliver the first click even when the host window is
+ * inactive. */
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
   (void)event;
   return YES;
 }
-
-- (void)viewDidMoveToSuperview
-{
+- (void)viewDidMoveToSuperview {
   [super viewDidMoveToSuperview];
   PuglWrapperView *wrapper = (PuglWrapperView *)[self superview];
-  if (wrapper)
+  if (wrapper) {
+    // Ensure the wrapper dispatches PUGL_CONFIGURE before the first
+    // PUGL_EXPOSE.  NSOpenGLView triggers this via its reshape method,
+    // but a plain layer-backed NSView does not.
     [wrapper setReshaped];
+  }
 }
 
-- (void)viewDidMoveToWindow
-{
+- (void)viewDidMoveToWindow {
   [super viewDidMoveToWindow];
   if (self.window) {
     metalCtx.metalLayer.contentsScale = self.window.backingScaleFactor;
@@ -97,52 +99,58 @@
   }
 }
 
-- (void)viewWillDraw
-{
+- (void)drawRect:(NSRect)rect {
+  [super drawRect:rect];
+}
+
+- (void)viewWillDraw {
   [super viewWillDraw];
 
-  if (!puglview)
+  if (!puglview) {
     return;
+  }
 
   PuglWrapperView *wrapper = (PuglWrapperView *)[self superview];
   [wrapper dispatchExpose:self.bounds];
 }
 
-- (void)viewDidChangeBackingProperties
-{
+- (void)viewDidChangeBackingProperties {
   [super viewDidChangeBackingProperties];
-  if (self.window)
+  if (self.window) {
     metalCtx.metalLayer.contentsScale = self.window.backingScaleFactor;
+  }
 }
 
 @end
 
-static PuglStatus
-puglMacMetalCreate(PuglView *view)
-{
+// --- Pugl backend callbacks ---
+
+static PuglStatus puglMacMetalCreate(PuglView *view) {
   PuglInternals *impl = view->impl;
   PuglMetalView *drawView = [PuglMetalView alloc];
 
   drawView->puglview = view;
   drawView = [drawView initWithFrame:[impl->wrapperView bounds]];
-  if (!drawView)
+  if (!drawView) {
     return PUGL_CREATE_CONTEXT_FAILED;
+  }
 
-  if (view->hints[PUGL_RESIZABLE])
+  if (view->hints[PUGL_RESIZABLE]) {
     [drawView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-  else
+  } else {
     [drawView setAutoresizingMask:NSViewNotSizable];
+  }
 
   impl->drawView = drawView;
   return PUGL_SUCCESS;
 }
 
-static void
-puglMacMetalDestroy(PuglView *view)
-{
+static void puglMacMetalDestroy(PuglView *view) {
   PuglMetalView *drawView = (PuglMetalView *)view->impl->drawView;
 
+  // Prevent updateLayer from dispatching events during teardown.
   drawView->puglview = NULL;
+
   [drawView setNeedsDisplay:NO];
   [drawView removeFromSuperview];
   [drawView release];
@@ -150,51 +158,59 @@ puglMacMetalDestroy(PuglView *view)
   view->impl->drawView = nil;
 }
 
-static PuglStatus
-puglMacMetalEnter(PuglView *view, const PuglExposeEvent *expose)
-{
+static PuglStatus puglMacMetalEnter(PuglView *view,
+                                    const PuglExposeEvent *expose) {
   PuglMetalView *drawView = (PuglMetalView *)view->impl->drawView;
-  if (!drawView)
+  if (!drawView) {
     return PUGL_FAILURE;
+  }
 
   if (expose) {
     PuglMetalContext *ctx = &drawView->metalCtx;
 
     CGSize size = [drawView convertSizeToBacking:drawView.bounds.size];
-    if (size.width <= 0 || size.height <= 0)
+    if (size.width <= 0 || size.height <= 0) {
       return PUGL_FAILURE;
+    }
 
     ctx->metalLayer.drawableSize = size;
+
     ctx->currentDrawable = [ctx->metalLayer nextDrawable];
-    if (!ctx->currentDrawable)
+    if (!ctx->currentDrawable) {
       return PUGL_FAILURE;
+    }
 
     ctx->commandBuffer = [ctx->commandQueue commandBuffer];
-    if (!ctx->commandBuffer)
+    if (!ctx->commandBuffer) {
       return PUGL_FAILURE;
+    }
 
     ctx->renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-    ctx->renderPassDescriptor.colorAttachments[0].texture = ctx->currentDrawable.texture;
-    ctx->renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
-    ctx->renderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+    ctx->renderPassDescriptor.colorAttachments[0].texture =
+        ctx->currentDrawable.texture;
+    ctx->renderPassDescriptor.colorAttachments[0].loadAction =
+        MTLLoadActionClear;
+    ctx->renderPassDescriptor.colorAttachments[0].storeAction =
+        MTLStoreActionStore;
     ctx->renderPassDescriptor.colorAttachments[0].clearColor =
-        MTLClearColorMake(0.10, 0.11, 0.12, 1.0);
+        MTLClearColorMake(0.12, 0.12, 0.12, 1.0);
 
-    ctx->renderEncoder =
-        [ctx->commandBuffer renderCommandEncoderWithDescriptor:ctx->renderPassDescriptor];
-    if (!ctx->renderEncoder)
+    ctx->renderEncoder = [ctx->commandBuffer
+        renderCommandEncoderWithDescriptor:ctx->renderPassDescriptor];
+    if (!ctx->renderEncoder) {
       return PUGL_FAILURE;
+    }
   }
 
   return PUGL_SUCCESS;
 }
 
-static PuglStatus
-puglMacMetalLeave(PuglView *view, const PuglExposeEvent *expose)
-{
+static PuglStatus puglMacMetalLeave(PuglView *view,
+                                    const PuglExposeEvent *expose) {
   PuglMetalView *drawView = (PuglMetalView *)view->impl->drawView;
-  if (!drawView)
+  if (!drawView) {
     return PUGL_FAILURE;
+  }
 
   if (expose) {
     PuglMetalContext *ctx = &drawView->metalCtx;
@@ -212,35 +228,30 @@ puglMacMetalLeave(PuglView *view, const PuglExposeEvent *expose)
   return PUGL_SUCCESS;
 }
 
-static void *
-puglMacMetalGetContext(PuglView *view)
-{
+static void *puglMacMetalGetContext(PuglView *view) {
   PuglMetalView *drawView = (PuglMetalView *)view->impl->drawView;
-  if (!drawView)
+  if (!drawView) {
     return NULL;
+  }
   return &drawView->metalCtx;
 }
 
-const PuglBackend *
-puglMetalBackend(void)
-{
-  static const PuglBackend backend = {puglStubConfigure,
-                                      puglMacMetalCreate,
-                                      puglMacMetalDestroy,
-                                      puglMacMetalEnter,
-                                      puglMacMetalLeave,
-                                      puglMacMetalGetContext};
+// --- Public API ---
+
+const PuglBackend *puglMetalBackend(void) {
+  static const PuglBackend backend = {
+      puglStubConfigure, puglMacMetalCreate, puglMacMetalDestroy,
+      puglMacMetalEnter, puglMacMetalLeave,  puglMacMetalGetContext};
   return &backend;
 }
 
-PuglStatus
-puglEnterContext(PuglView *view)
-{
+// puglEnterContext / puglLeaveContext are defined in the GL backend file
+// (mac_gl.m) which we no longer compile on macOS, so provide them here.
+
+PuglStatus puglEnterContext(PuglView *view) {
   return view->backend->enter(view, NULL);
 }
 
-PuglStatus
-puglLeaveContext(PuglView *view)
-{
+PuglStatus puglLeaveContext(PuglView *view) {
   return view->backend->leave(view, NULL);
 }

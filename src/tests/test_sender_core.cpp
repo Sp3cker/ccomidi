@@ -16,246 +16,268 @@ namespace {
 int g_testsRun = 0;
 int g_testsPassed = 0;
 
-#define ASSERT_TRUE(cond, msg) do { \
-    ++g_testsRun; \
-    if (!(cond)) { \
-        std::fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); \
-    } else { \
-        ++g_testsPassed; \
-    } \
-} while (0)
+#define ASSERT_TRUE(cond, msg)                                                 \
+  do {                                                                         \
+    ++g_testsRun;                                                              \
+    if (!(cond)) {                                                             \
+      std::fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__);             \
+    } else {                                                                   \
+      ++g_testsPassed;                                                         \
+    }                                                                          \
+  } while (0)
 
-#define ASSERT_EQ(actual, expected, msg) do { \
-    ++g_testsRun; \
-    if ((actual) != (expected)) { \
-        std::fprintf(stderr, "FAIL: %s: expected %d, got %d (line %d)\n", \
-                     msg, static_cast<int>(expected), static_cast<int>(actual), __LINE__); \
-    } else { \
-        ++g_testsPassed; \
-    } \
-} while (0)
+#define ASSERT_EQ(actual, expected, msg)                                       \
+  do {                                                                         \
+    ++g_testsRun;                                                              \
+    if ((actual) != (expected)) {                                              \
+      std::fprintf(stderr, "FAIL: %s: expected %d, got %d (line %d)\n", msg,   \
+                   static_cast<int>(expected), static_cast<int>(actual),       \
+                   __LINE__);                                                  \
+    } else {                                                                   \
+      ++g_testsPassed;                                                         \
+    }                                                                          \
+  } while (0)
 
-AutomationEvent make_event(std::uint32_t time, ParamKind kind, std::uint8_t row, double value)
-{
-    AutomationEvent event = {};
-    event.time = time;
-    event.address = ParamAddress{kind, row};
-    event.value = value;
-    return event;
+AutomationEvent make_event(std::uint32_t time, ParamKind kind, std::uint8_t row,
+                           double value) {
+  AutomationEvent event = {};
+  event.time = time;
+  event.address = ParamAddress{kind, row};
+  event.value = value;
+  return event;
 }
 
-void configure_volume_row(SenderCore *core)
-{
-    core->set_output_channel(2.0);
-    core->set_row_enabled(0, 1.0);
-    core->set_row_type(0, static_cast<double>(CommandType::Volume));
-    core->set_row_value(0, 0, 100.0);
+void configure_volume_row(SenderCore *core) {
+  core->set_output_channel(2.0);
+  core->set_row_enabled(0, 1.0);
+  core->set_row_type(0, static_cast<double>(CommandType::Volume));
+  core->set_row_value(0, 0, 100.0);
 }
 
-void test_start_of_playback_emits_snapshot()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    configure_volume_row(&core);
+void test_start_of_playback_emits_snapshot() {
+  SenderCore core;
+  PlannedEvents planned;
+  configure_volume_row(&core);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-    ASSERT_EQ(planned.count, 1, "playback start emits one direct CC");
-    ASSERT_EQ(planned.events[0].time, 0, "playback snapshot is at time zero");
-    ASSERT_EQ(planned.events[0].status, 0xB2, "configured channel overrides outgoing MIDI channel");
-    ASSERT_EQ(planned.events[0].data1, 0x07, "volume row emits CC 7");
-    ASSERT_EQ(planned.events[0].data2, 100, "volume row emits configured value");
+  ASSERT_EQ(planned.count, 1, "playback start emits one direct CC");
+  ASSERT_EQ(planned.events[0].time, 0, "playback snapshot is at time zero");
+  ASSERT_EQ(planned.events[0].status, 0xB2,
+            "configured channel overrides outgoing MIDI channel");
+  ASSERT_EQ(planned.events[0].data1, 0x07, "volume row emits CC 7");
+  ASSERT_EQ(planned.events[0].data2, 100, "volume row emits configured value");
 }
 
-void test_floor_quantization_deduplicates_automation()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    configure_volume_row(&core);
+void test_floor_quantization_deduplicates_automation() {
+  SenderCore core;
+  PlannedEvents planned;
+  configure_volume_row(&core);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-    AutomationEvent events[] = {
-        make_event(0, ParamKind::RowValue0, 0, 27.1),
-        make_event(1, ParamKind::RowValue0, 0, 27.2),
-        make_event(2, ParamKind::RowValue0, 0, 27.3),
-        make_event(3, ParamKind::RowValue0, 0, 27.7),
-        make_event(4, ParamKind::RowValue0, 0, 28.0),
-    };
+  AutomationEvent events[] = {
+      make_event(0, ParamKind::RowValue0, 0, 27.1),
+      make_event(1, ParamKind::RowValue0, 0, 27.2),
+      make_event(2, ParamKind::RowValue0, 0, 27.3),
+      make_event(3, ParamKind::RowValue0, 0, 27.7),
+      make_event(4, ParamKind::RowValue0, 0, 28.0),
+  };
 
-    core.process_block(TransportState{true}, events, sizeof(events) / sizeof(events[0]), &planned);
+  core.process_block(TransportState{true}, events,
+                     sizeof(events) / sizeof(events[0]), &planned);
 
-    ASSERT_EQ(planned.count, 2, "only quantized changes are emitted");
-    ASSERT_EQ(planned.events[0].time, 0, "first changed value emits at its event time");
-    ASSERT_EQ(planned.events[0].data2, 27, "value is floored before emission");
-    ASSERT_EQ(planned.events[1].time, 4, "next quantized change emits when the integer changes");
-    ASSERT_EQ(planned.events[1].data2, 28, "changed integer is emitted");
+  ASSERT_EQ(planned.count, 2, "only quantized changes are emitted");
+  ASSERT_EQ(planned.events[0].time, 0,
+            "first changed value emits at its event time");
+  ASSERT_EQ(planned.events[0].data2, 27, "value is floored before emission");
+  ASSERT_EQ(planned.events[1].time, 4,
+            "next quantized change emits when the integer changes");
+  ASSERT_EQ(planned.events[1].data2, 28, "changed integer is emitted");
 }
 
-void test_channel_change_resends_snapshot()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    configure_volume_row(&core);
+void test_channel_change_resends_snapshot() {
+  SenderCore core;
+  PlannedEvents planned;
+  configure_volume_row(&core);
+  core.set_output_channel(5.0);
+  core.set_row_enabled(0, 1.0);
+  core.set_row_type(0, static_cast<double>(CommandType::Volume));
+  core.set_row_value(0, 0, 64.0);
+  core.set_output_channel(2.0);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-    AutomationEvent event = make_event(12, ParamKind::OutputChannel, 0, 5.9);
-    core.process_block(TransportState{true}, &event, 1, &planned);
+  AutomationEvent event = make_event(12, ParamKind::OutputChannel, 0, 5.9);
+  core.process_block(TransportState{true}, &event, 1, &planned);
 
-    ASSERT_EQ(planned.count, 1, "channel change resends snapshot");
-    ASSERT_EQ(planned.events[0].time, 12, "channel resend preserves event time");
-    ASSERT_EQ(planned.events[0].status, 0xB5, "resend uses the new floored output channel");
-    ASSERT_EQ(planned.events[0].data2, 100, "resend carries current row value");
+  ASSERT_EQ(planned.count, 1, "channel change resends snapshot");
+  ASSERT_EQ(planned.events[0].time, 12, "channel resend preserves event time");
+  ASSERT_EQ(planned.events[0].status, 0xB5,
+            "resend uses the new floored output channel");
+  ASSERT_EQ(planned.events[0].data2, 64,
+            "resend carries the selected channel bank value");
 }
 
-void test_compound_xcmd_row_reemits_full_sequence()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    core.set_output_channel(3.0);
-    core.set_row_enabled(0, 1.0);
-    core.set_row_type(0, static_cast<double>(CommandType::XcmdIecv));
-    core.set_row_value(0, 0, 22.0);
+void test_compound_xcmd_row_reemits_full_sequence() {
+  SenderCore core;
+  PlannedEvents planned;
+  core.set_output_channel(3.0);
+  core.set_row_enabled(0, 1.0);
+  core.set_row_type(0, static_cast<double>(CommandType::XcmdIecv));
+  core.set_row_value(0, 0, 22.0);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
-    ASSERT_EQ(planned.count, 2, "xcmd snapshot emits selector and data");
-    ASSERT_EQ(planned.events[0].data1, 0x1E, "xcmd selector controller emitted first");
-    ASSERT_EQ(planned.events[0].data2, 0x08, "xcmd IECV selector value emitted");
-    ASSERT_EQ(planned.events[1].data1, 0x1D, "xcmd data controller emitted second");
-    ASSERT_EQ(planned.events[1].data2, 22, "xcmd data value emitted");
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 2, "xcmd snapshot emits selector and data");
+  ASSERT_EQ(planned.events[0].data1, 0x1E,
+            "xcmd selector controller emitted first");
+  ASSERT_EQ(planned.events[0].data2, 0x08, "xcmd IECV selector value emitted");
+  ASSERT_EQ(planned.events[1].data1, 0x1D,
+            "xcmd data controller emitted second");
+  ASSERT_EQ(planned.events[1].data2, 22, "xcmd data value emitted");
 
-    AutomationEvent event = make_event(8, ParamKind::RowValue0, 0, 23.9);
-    core.process_block(TransportState{true}, &event, 1, &planned);
+  AutomationEvent event = make_event(8, ParamKind::RowValue0, 0, 23.9);
+  core.process_block(TransportState{true}, &event, 1, &planned);
 
-    ASSERT_EQ(planned.count, 2, "compound row change reemits the full sequence");
-    ASSERT_EQ(planned.events[0].data1, 0x1E, "compound resend includes selector");
-    ASSERT_EQ(planned.events[1].data1, 0x1D, "compound resend includes value");
-    ASSERT_EQ(planned.events[1].data2, 23, "compound resend uses floored value");
+  ASSERT_EQ(planned.count, 2, "compound row change reemits the full sequence");
+  ASSERT_EQ(planned.events[0].data1, 0x1E, "compound resend includes selector");
+  ASSERT_EQ(planned.events[1].data1, 0x1D, "compound resend includes value");
+  ASSERT_EQ(planned.events[1].data2, 23, "compound resend uses floored value");
 }
 
-void test_stopped_automation_is_applied_on_next_start()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    configure_volume_row(&core);
+void test_stopped_automation_is_applied_on_next_start() {
+  SenderCore core;
+  PlannedEvents planned;
+  configure_volume_row(&core);
 
-    core.process_block(TransportState{false}, nullptr, 0, &planned);
-    ASSERT_EQ(planned.count, 0, "stopped transport emits nothing");
+  core.process_block(TransportState{false}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 0, "stopped transport emits nothing");
 
-    AutomationEvent event = make_event(0, ParamKind::RowValue0, 0, 43.8);
-    core.process_block(TransportState{false}, &event, 1, &planned);
-    ASSERT_EQ(planned.count, 0, "automation while stopped does not emit");
+  AutomationEvent event = make_event(0, ParamKind::RowValue0, 0, 43.8);
+  core.process_block(TransportState{false}, &event, 1, &planned);
+  ASSERT_EQ(planned.count, 0, "automation while stopped does not emit");
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
-    ASSERT_EQ(planned.count, 1, "next playback start emits cached automated value");
-    ASSERT_EQ(planned.events[0].data2, 43, "playback start uses current automated state");
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 1,
+            "next playback start emits cached automated value");
+  ASSERT_EQ(planned.events[0].data2, 43,
+            "playback start uses current automated state");
 }
 
-void test_memacc_reemits_full_canonical_sequence()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    core.set_output_channel(1.0);
-    core.set_row_enabled(0, 1.0);
-    core.set_row_type(0, static_cast<double>(CommandType::MemAcc0C));
-    core.set_row_value(0, 0, 1.0);
-    core.set_row_value(0, 1, 16.0);
-    core.set_row_value(0, 2, 32.0);
-    core.set_row_value(0, 3, 64.0);
+void test_memacc_reemits_full_canonical_sequence() {
+  SenderCore core;
+  PlannedEvents planned;
+  core.set_output_channel(1.0);
+  core.set_row_enabled(0, 1.0);
+  core.set_row_type(0, static_cast<double>(CommandType::MemAcc0C));
+  core.set_row_value(0, 0, 1.0);
+  core.set_row_value(0, 1, 16.0);
+  core.set_row_value(0, 2, 32.0);
+  core.set_row_value(0, 3, 64.0);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
-    ASSERT_EQ(planned.count, 4, "memacc emits full setup sequence");
-    ASSERT_EQ(planned.events[0].data1, 0x0D, "memacc op byte emitted");
-    ASSERT_EQ(planned.events[1].data1, 0x0E, "memacc param1 byte emitted");
-    ASSERT_EQ(planned.events[2].data1, 0x0F, "memacc param2 byte emitted");
-    ASSERT_EQ(planned.events[3].data1, 0x0C, "memacc trigger byte emitted");
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 4, "memacc emits full setup sequence");
+  ASSERT_EQ(planned.events[0].data1, 0x0D, "memacc op byte emitted");
+  ASSERT_EQ(planned.events[1].data1, 0x0E, "memacc param1 byte emitted");
+  ASSERT_EQ(planned.events[2].data1, 0x0F, "memacc param2 byte emitted");
+  ASSERT_EQ(planned.events[3].data1, 0x0C, "memacc trigger byte emitted");
 
-    AutomationEvent event = make_event(9, ParamKind::RowValue3, 0, 80.9);
-    core.process_block(TransportState{true}, &event, 1, &planned);
-    ASSERT_EQ(planned.count, 4, "memacc change reemits all setup bytes");
-    ASSERT_EQ(planned.events[3].data2, 80, "memacc trigger value is floored");
+  AutomationEvent event = make_event(9, ParamKind::RowValue3, 0, 80.9);
+  core.process_block(TransportState{true}, &event, 1, &planned);
+  ASSERT_EQ(planned.count, 4, "memacc change reemits all setup bytes");
+  ASSERT_EQ(planned.events[3].data2, 80, "memacc trigger value is floored");
 }
 
-void test_runtime_reset_preserves_parameter_values()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    configure_volume_row(&core);
+void test_runtime_reset_preserves_parameter_values() {
+  SenderCore core;
+  PlannedEvents planned;
+  configure_volume_row(&core);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
-    core.reset_runtime_state();
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  core.reset_runtime_state();
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-    ASSERT_EQ(planned.count, 1, "runtime reset rearms playback snapshot");
-    ASSERT_EQ(planned.events[0].data2, 100, "runtime reset preserves parameter values");
+  ASSERT_EQ(planned.count, 1, "runtime reset rearms playback snapshot");
+  ASSERT_EQ(planned.events[0].data2, 100,
+            "runtime reset preserves parameter values");
 }
 
-void test_preapplied_channel_change_resends_snapshot()
-{
-    SenderCore core;
-    PlannedEvents planned;
-    configure_volume_row(&core);
+void test_preapplied_channel_change_resends_snapshot() {
+  SenderCore core;
+  PlannedEvents planned;
+  configure_volume_row(&core);
+  core.set_output_channel(7.0);
+  core.set_row_enabled(0, 1.0);
+  core.set_row_type(0, static_cast<double>(CommandType::Volume));
+  core.set_row_value(0, 0, 45.0);
+  core.set_output_channel(2.0);
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-    std::array<bool, ccomidi::kMaxCommandRows> rowChanged = {};
-    bool channelChanged = false;
-    core.apply_parameter_change(make_event(0, ParamKind::OutputChannel, 0, 7.2), &channelChanged, &rowChanged);
-    core.emit_preapplied_changes(true, channelChanged, rowChanged, 0, &planned);
+  std::array<bool, ccomidi::kMaxCommandRows> rowChanged = {};
+  bool channelChanged = false;
+  core.apply_parameter_change(make_event(0, ParamKind::OutputChannel, 0, 7.2),
+                              &channelChanged, &rowChanged);
+  core.emit_preapplied_changes(true, channelChanged, rowChanged, 0, &planned);
 
-    ASSERT_EQ(planned.count, 1, "preapplied channel change resends snapshot");
-    ASSERT_EQ(planned.events[0].status, 0xB7, "preapplied resend uses new output channel");
-    ASSERT_EQ(planned.events[0].data2, 100, "preapplied resend carries current value");
+  ASSERT_EQ(planned.count, 1, "preapplied channel change resends snapshot");
+  ASSERT_EQ(planned.events[0].status, 0xB7,
+            "preapplied resend uses new output channel");
+  ASSERT_EQ(planned.events[0].data2, 45,
+            "preapplied resend carries selected channel bank value");
 }
 
-void test_channel_switch_uses_independent_channel_banks()
-{
-    SenderCore core;
-    PlannedEvents planned;
+void test_channel_switch_uses_independent_channel_banks() {
+  SenderCore core;
+  PlannedEvents planned;
 
-    core.set_output_channel(0.0);
-    core.set_row_enabled(0, 1.0);
-    core.set_row_type(0, static_cast<double>(CommandType::ModType));
-    core.set_row_value(0, 0, 10.0);
+  core.set_output_channel(0.0);
+  core.set_row_enabled(0, 1.0);
+  core.set_row_type(0, static_cast<double>(CommandType::ModType));
+  core.set_row_value(0, 0, 10.0);
 
-    core.set_output_channel(1.0);
-    ASSERT_EQ(static_cast<int>(core.row_value_raw(0, 0)), 0, "new channel starts with its own default value");
+  core.set_output_channel(1.0);
+  ASSERT_EQ(static_cast<int>(core.row_value_raw(0, 0)), 0,
+            "new channel starts with its own default value");
 
-    core.set_row_enabled(0, 1.0);
-    core.set_row_type(0, static_cast<double>(CommandType::ModType));
-    core.set_row_value(0, 0, 25.0);
+  core.set_row_enabled(0, 1.0);
+  core.set_row_type(0, static_cast<double>(CommandType::ModType));
+  core.set_row_value(0, 0, 25.0);
 
-    core.set_output_channel(0.0);
-    ASSERT_EQ(static_cast<int>(core.row_value_raw(0, 0)), 10, "switching back restores channel 1 value");
+  core.set_output_channel(0.0);
+  ASSERT_EQ(static_cast<int>(core.row_value_raw(0, 0)), 10,
+            "switching back restores channel 1 value");
 
-    core.process_block(TransportState{true}, nullptr, 0, &planned);
-    ASSERT_EQ(planned.count, 1, "playback snapshot emits active channel bank");
-    ASSERT_EQ(planned.events[0].status, 0xB0, "snapshot uses selected output channel");
-    ASSERT_EQ(planned.events[0].data1, 0x16, "mod type emits CC 22");
-    ASSERT_EQ(planned.events[0].data2, 10, "channel 1 bank value is preserved");
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 1, "playback snapshot emits active channel bank");
+  ASSERT_EQ(planned.events[0].status, 0xB0,
+            "snapshot uses selected output channel");
+  ASSERT_EQ(planned.events[0].data1, 0x16, "mod type emits CC 22");
+  ASSERT_EQ(planned.events[0].data2, 10, "channel 1 bank value is preserved");
 
-    AutomationEvent switchEvent = make_event(5, ParamKind::OutputChannel, 0, 1.0);
-    core.process_block(TransportState{true}, &switchEvent, 1, &planned);
-    ASSERT_EQ(planned.count, 1, "switching active channel resends selected channel bank");
-    ASSERT_EQ(planned.events[0].status, 0xB1, "switch resend uses channel 2 status");
-    ASSERT_EQ(planned.events[0].data2, 25, "switch resend uses channel 2 bank value");
+  AutomationEvent switchEvent = make_event(5, ParamKind::OutputChannel, 0, 1.0);
+  core.process_block(TransportState{true}, &switchEvent, 1, &planned);
+  ASSERT_EQ(planned.count, 1,
+            "switching active channel resends selected channel bank");
+  ASSERT_EQ(planned.events[0].status, 0xB1,
+            "switch resend uses channel 2 status");
+  ASSERT_EQ(planned.events[0].data2, 25,
+            "switch resend uses channel 2 bank value");
 }
 
 } // namespace
 
-int main()
-{
-    test_start_of_playback_emits_snapshot();
-    test_floor_quantization_deduplicates_automation();
-    test_channel_change_resends_snapshot();
-    test_compound_xcmd_row_reemits_full_sequence();
-    test_stopped_automation_is_applied_on_next_start();
-    test_memacc_reemits_full_canonical_sequence();
-    test_runtime_reset_preserves_parameter_values();
-    test_preapplied_channel_change_resends_snapshot();
-    test_channel_switch_uses_independent_channel_banks();
+int main() {
+  test_start_of_playback_emits_snapshot();
+  test_floor_quantization_deduplicates_automation();
+  test_channel_change_resends_snapshot();
+  test_compound_xcmd_row_reemits_full_sequence();
+  test_stopped_automation_is_applied_on_next_start();
+  test_memacc_reemits_full_canonical_sequence();
+  test_runtime_reset_preserves_parameter_values();
+  test_preapplied_channel_change_resends_snapshot();
+  test_channel_switch_uses_independent_channel_banks();
 
-    std::printf("Passed %d/%d tests\n", g_testsPassed, g_testsRun);
-    return g_testsPassed == g_testsRun ? EXIT_SUCCESS : EXIT_FAILURE;
+  std::printf("Passed %d/%d tests\n", g_testsPassed, g_testsRun);
+  return g_testsPassed == g_testsRun ? EXIT_SUCCESS : EXIT_FAILURE;
 }

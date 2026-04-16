@@ -14,7 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
-#include <string>
+
 #include <vector>
 
 #include "core/sender_core.h"
@@ -29,7 +29,7 @@ constexpr std::uint32_t kStateVersion = 3;
 Plugin *from_plugin(const clap_plugin_t *plugin) {
   return plugin ? static_cast<Plugin *>(plugin->plugin_data) : nullptr;
 }
-
+// const param_rules {}
 const char *command_type_name(CommandType type) {
   switch (type) {
   case CommandType::None:
@@ -85,7 +85,8 @@ CommandType sanitize_param_row_type(std::size_t row, CommandType type) {
 
 bool should_rescan_param_info(const ParamAddress &address) {
   return address.kind == ParamKind::OutputChannel ||
-         (address.kind == ParamKind::RowType && row_has_dynamic_type(address.row));
+         (address.kind == ParamKind::RowType &&
+          row_has_dynamic_type(address.row));
 }
 
 const char *command_field_name(CommandType type, std::uint32_t field) {
@@ -268,7 +269,10 @@ clap_param_info_flags param_flags_for_id(clap_id id) {
     return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS;
   }
 }
-
+void get_param_limits(ParamAddress &address, CommandType rowCommand,
+                      uint32_t field) {
+  auto x = address.kind;
+};
 void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
   std::memset(info, 0, sizeof(*info));
   info->id = id;
@@ -292,16 +296,18 @@ void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
     std::snprintf(info->module, sizeof(info->module), "Fixed/%s",
                   fixed_row_name(address.row));
   else
-    std::snprintf(info->module, sizeof(info->module), "Rows/%02u",
-                  static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
+    std::snprintf(
+        info->module, sizeof(info->module), "Rows/%02u",
+        static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
   switch (address.kind) {
   case ParamKind::RowEnabled:
     if (is_fixed_command_row(address.row))
       std::snprintf(info->name, sizeof(info->name), "%s Enable",
                     fixed_row_name(address.row));
     else
-      std::snprintf(info->name, sizeof(info->name), "Row %02u Enable",
-                    static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
+      std::snprintf(
+          info->name, sizeof(info->name), "Row %02u Enable",
+          static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
     info->min_value = 0.0;
     info->max_value = 1.0;
     info->default_value = 0.0;
@@ -316,8 +322,9 @@ void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
       info->max_value = fixedType;
       info->default_value = fixedType;
     } else {
-      std::snprintf(info->name, sizeof(info->name), "Row %02u Command",
-                    static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
+      std::snprintf(
+          info->name, sizeof(info->name), "Row %02u Command",
+          static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
       info->min_value = static_cast<double>(CommandType::None);
       info->max_value = static_cast<double>(CommandType::MemAcc10);
       info->default_value = static_cast<double>(CommandType::None);
@@ -338,9 +345,10 @@ void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
                     fixed_row_name(address.row),
                     command_field_name(rowCommand, field));
     else
-      std::snprintf(info->name, sizeof(info->name), "Row %02u %s",
-                    static_cast<unsigned>(address.row - kFixedCommandRowCount + 1),
-                    command_field_name(rowCommand, field));
+      std::snprintf(
+          info->name, sizeof(info->name), "Row %02u %s",
+          static_cast<unsigned>(address.row - kFixedCommandRowCount + 1),
+          command_field_name(rowCommand, field));
     info->min_value = 0.0;
     info->max_value = 127.0;
     info->default_value = 0.0;
@@ -1029,8 +1037,8 @@ bool params_text_to_value(const clap_plugin_t *plugin, clap_id paramId,
          candidate <= static_cast<int>(CommandType::MemAcc10); ++candidate) {
       if (std::strcmp(display, command_type_name(
                                    static_cast<CommandType>(candidate))) == 0) {
-        *value = static_cast<double>(
-            sanitize_param_row_type(address.row, static_cast<CommandType>(candidate)));
+        *value = static_cast<double>(sanitize_param_row_type(
+            address.row, static_cast<CommandType>(candidate)));
         return true;
       }
     }
@@ -1097,7 +1105,8 @@ bool read_row_state(const clap_istream_t *stream, double values[6]) {
          static_cast<std::int64_t>(sizeof(double) * 6);
 }
 
-void apply_row_state(SenderCore *core, std::size_t row, const double values[6]) {
+void apply_row_state(SenderCore *core, std::size_t row,
+                     const double values[6]) {
   if (!core)
     return;
   core->set_row_enabled(row, values[0]);
@@ -1124,12 +1133,10 @@ bool state_save(const clap_plugin_t *plugin, const clap_ostream_t *stream) {
     return false;
 
   for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
-    const double values[] = {self->core.row_enabled_value(row),
-                             self->core.row_type_value(row),
-                             self->core.row_value_raw(row, 0),
-                             self->core.row_value_raw(row, 1),
-                             self->core.row_value_raw(row, 2),
-                             self->core.row_value_raw(row, 3)};
+    const double values[] = {
+        self->core.row_enabled_value(row), self->core.row_type_value(row),
+        self->core.row_value_raw(row, 0),  self->core.row_value_raw(row, 1),
+        self->core.row_value_raw(row, 2),  self->core.row_value_raw(row, 3)};
     if (stream->write(stream, values, sizeof(values)) != sizeof(values))
       return false;
   }

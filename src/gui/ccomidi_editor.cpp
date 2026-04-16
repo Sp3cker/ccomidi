@@ -275,13 +275,15 @@ void draw_editor(EditorState *editor) {
                           static_cast<double>(outputChannel - 1));
 
   ImGui::Spacing();
-  ImGui::TextUnformatted("Always Available");
+
   if (ImGui::BeginTable("fixed_rows", 4,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-    ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+    ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed,
+                            120.0f);
     ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 40.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.8f);
-    ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 2.2f);
+    ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch,
+                            2.2f);
     ImGui::TableHeadersRow();
 
     for (std::size_t row = 0; row < kFixedCommandRowCount; ++row) {
@@ -325,7 +327,8 @@ void draw_editor(EditorState *editor) {
                             2.8f);
     ImGui::TableHeadersRow();
 
-    for (std::size_t row = kFixedCommandRowCount; row < kMaxCommandRows; ++row) {
+    for (std::size_t row = kFixedCommandRowCount; row < kMaxCommandRows;
+         ++row) {
       const CommandType type = static_cast<CommandType>(
           static_cast<int>(std::floor(snapshot.rows[row].type)));
 
@@ -354,9 +357,7 @@ void draw_editor(EditorState *editor) {
           if (!is_table_command_type(candidateType))
             continue;
           const bool selected = candidate == typeIndex;
-          if (ImGui::Selectable(
-                  command_type_name(candidateType),
-                  selected)) {
+          if (ImGui::Selectable(command_type_name(candidateType), selected)) {
             apply_ui_param_change(editor->plugin,
                                   row_param_id(static_cast<std::uint32_t>(row),
                                                RowParamSlot::Type),

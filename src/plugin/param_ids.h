@@ -31,7 +31,9 @@ constexpr clap_id row_param_id(std::uint32_t row, RowParamSlot slot) {
 constexpr std::uint32_t total_param_count() {
   return 1 + static_cast<std::uint32_t>(kMaxCommandRows) * kParamsPerRow;
 }
-
+// ID is the index of the automation.
+// Its divided by kParamsPerRow to know which row/command its for
+// Modulo gives it's index inside that row
 inline bool decode_param_id(clap_id id, ParamAddress *address) {
   if (!address)
     return false;

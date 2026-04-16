@@ -63,7 +63,7 @@ target_link_libraries(ccomidi_core_tests PRIVATE
     ccomidi_core
 )
 
-set(CLAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../poryaaaa/clap-sdk/include")
+set(CLAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap/include")
 
 add_library(ccomidi MODULE
     src/plugin/ccomidi_plugin.cpp

@@ -40,18 +40,16 @@ SenderCore::SenderCore() { reset(); }
 
 void SenderCore::reset() {
   outputChannelValue_ = 0.0;
-  channels_ = {};
+  rows_ = {};
   reset_runtime_state();
 }
 
 void SenderCore::reset_runtime_state() {
   lastEmittedChannel_ = output_channel();
   lastTransportPlaying_ = false;
-  for (ChannelState &channel : channels_) {
-    for (RowState &row : channel.rows) {
-      row.lastEmittedValid = false;
-      row.lastEmitted = {};
-    }
+  for (RowState &row : rows_) {
+    row.lastEmittedValid = false;
+    row.lastEmitted = {};
   }
 }
 
@@ -62,55 +60,41 @@ void SenderCore::set_output_channel(double value) {
 void SenderCore::set_row_enabled(std::size_t row, double value) {
   if (row >= kMaxCommandRows)
     return;
-  active_channel_state().rows[row].enabledValue = value;
+  rows_[row].enabledValue = value;
 }
 
 void SenderCore::set_row_type(std::size_t row, double value) {
   if (row >= kMaxCommandRows)
     return;
-  active_channel_state().rows[row].typeValue = value;
+  rows_[row].typeValue = static_cast<double>(
+      sanitize_row_type(row, floor_to_command_type(value)));
 }
 
 void SenderCore::set_row_value(std::size_t row, std::size_t field,
                                double value) {
   if (row >= kMaxCommandRows || field >= kMaxCommandFields)
     return;
-  active_channel_state().rows[row].fieldValues[field] = value;
+  rows_[row].fieldValues[field] = value;
 }
 
 double SenderCore::output_channel_value() const { return outputChannelValue_; }
 
 double SenderCore::row_enabled_value(std::size_t row) const {
-  return row_enabled_value(output_channel(), row);
-}
-
-double SenderCore::row_enabled_value(std::size_t channel,
-                                     std::size_t row) const {
-  if (channel >= channels_.size() || row >= kMaxCommandRows)
+  if (row >= kMaxCommandRows)
     return 0.0;
-  return channels_[channel].rows[row].enabledValue;
+  return rows_[row].enabledValue;
 }
 
 double SenderCore::row_type_value(std::size_t row) const {
-  return row_type_value(output_channel(), row);
-}
-
-double SenderCore::row_type_value(std::size_t channel, std::size_t row) const {
-  if (channel >= channels_.size() || row >= kMaxCommandRows)
+  if (row >= kMaxCommandRows)
     return 0.0;
-  return channels_[channel].rows[row].typeValue;
+  return static_cast<double>(row_type(row));
 }
 
 double SenderCore::row_value_raw(std::size_t row, std::size_t field) const {
-  return row_value_raw(output_channel(), row, field);
-}
-
-double SenderCore::row_value_raw(std::size_t channel, std::size_t row,
-                                 std::size_t field) const {
-  if (channel >= channels_.size() || row >= kMaxCommandRows ||
-      field >= kMaxCommandFields)
+  if (row >= kMaxCommandRows || field >= kMaxCommandFields)
     return 0.0;
-  return channels_[channel].rows[row].fieldValues[field];
+  return rows_[row].fieldValues[field];
 }
 
 std::uint8_t SenderCore::output_channel() const {
@@ -120,20 +104,19 @@ std::uint8_t SenderCore::output_channel() const {
 bool SenderCore::row_enabled(std::size_t row) const {
   if (row >= kMaxCommandRows)
     return false;
-  return floor_to_u8(active_channel_state().rows[row].enabledValue, 0, 1) != 0;
+  return floor_to_u8(rows_[row].enabledValue, 0, 1) != 0;
 }
 
 CommandType SenderCore::row_type(std::size_t row) const {
   if (row >= kMaxCommandRows)
     return CommandType::None;
-  return floor_to_command_type(active_channel_state().rows[row].typeValue);
+  return sanitize_row_type(row, floor_to_command_type(rows_[row].typeValue));
 }
 
 std::uint8_t SenderCore::row_value(std::size_t row, std::size_t field) const {
   if (row >= kMaxCommandRows || field >= kMaxCommandFields)
     return 0;
-  return floor_to_u8(active_channel_state().rows[row].fieldValues[field], 0,
-                     127);
+  return floor_to_u8(rows_[row].fieldValues[field], 0, 127);
 }
 
 std::uint8_t SenderCore::floor_to_u8(double value, std::uint8_t minValue,
@@ -153,12 +136,12 @@ CommandType SenderCore::floor_to_command_type(double value) {
   return static_cast<CommandType>(raw);
 }
 
-const SenderCore::ChannelState &SenderCore::active_channel_state() const {
-  return channels_[output_channel()];
-}
-
-SenderCore::ChannelState &SenderCore::active_channel_state() {
-  return channels_[output_channel()];
+CommandType SenderCore::sanitize_row_type(std::size_t row, CommandType type) {
+  if (is_fixed_command_row(row))
+    return fixed_command_type_for_row(row);
+  if (is_fixed_command_type(type))
+    return CommandType::None;
+  return type;
 }
 
 SenderCore::EncodedCommand SenderCore::encode_row(std::size_t row) const {
@@ -252,11 +235,11 @@ bool SenderCore::apply_event(const AutomationEvent &event, bool *channelChanged,
       return false;
     {
       const bool before = row_enabled(event.address.row);
-      active_channel_state().rows[event.address.row].enabledValue = event.value;
+      rows_[event.address.row].enabledValue = event.value;
       const bool after = row_enabled(event.address.row);
       (*rowChanged)[event.address.row] = before != after;
       if (!after)
-        active_channel_state().rows[event.address.row].lastEmittedValid = false;
+        rows_[event.address.row].lastEmittedValid = false;
       return before != after;
     }
   case ParamKind::RowType:
@@ -264,7 +247,8 @@ bool SenderCore::apply_event(const AutomationEvent &event, bool *channelChanged,
       return false;
     {
       const CommandType before = row_type(event.address.row);
-      active_channel_state().rows[event.address.row].typeValue = event.value;
+      rows_[event.address.row].typeValue = static_cast<double>(
+          sanitize_row_type(event.address.row, floor_to_command_type(event.value)));
       const CommandType after = row_type(event.address.row);
       (*rowChanged)[event.address.row] = before != after;
       return before != after;
@@ -279,8 +263,7 @@ bool SenderCore::apply_event(const AutomationEvent &event, bool *channelChanged,
       const std::size_t field = static_cast<std::size_t>(event.address.kind) -
                                 static_cast<std::size_t>(ParamKind::RowValue0);
       const std::uint8_t before = row_value(event.address.row, field);
-      active_channel_state().rows[event.address.row].fieldValues[field] =
-          event.value;
+      rows_[event.address.row].fieldValues[field] = event.value;
       const std::uint8_t after = row_value(event.address.row, field);
       (*rowChanged)[event.address.row] = before != after;
       return before != after;
@@ -311,11 +294,10 @@ void SenderCore::append_encoded(std::uint32_t time,
 void SenderCore::emit_snapshot(std::uint32_t time, PlannedEvents *out) {
   lastEmittedChannel_ = output_channel();
 
-  ChannelState &channel = active_channel_state();
-  for (std::size_t row = 0; row < channel.rows.size(); ++row) {
+  for (std::size_t row = 0; row < rows_.size(); ++row) {
     EncodedCommand encoded = encode_row(row);
-    channel.rows[row].lastEmitted = encoded;
-    channel.rows[row].lastEmittedValid = encoded.valid;
+    rows_[row].lastEmitted = encoded;
+    rows_[row].lastEmittedValid = encoded.valid;
     append_encoded(time, encoded, out);
   }
 }
@@ -323,13 +305,12 @@ void SenderCore::emit_snapshot(std::uint32_t time, PlannedEvents *out) {
 void SenderCore::emit_changed_rows(
     std::uint32_t time, const std::array<bool, kMaxCommandRows> &rowChanged,
     PlannedEvents *out) {
-  ChannelState &channel = active_channel_state();
-  for (std::size_t row = 0; row < channel.rows.size(); ++row) {
+  for (std::size_t row = 0; row < rows_.size(); ++row) {
     if (!rowChanged[row])
       continue;
 
     EncodedCommand encoded = encode_row(row);
-    RowState &state = channel.rows[row];
+    RowState &state = rows_[row];
 
     if (!encoded.valid) {
       state.lastEmittedValid = false;

@@ -11,6 +11,7 @@ constexpr std::size_t kMidiChannelCount = 16;
 constexpr std::size_t kMaxCommandRows = 16;
 constexpr std::size_t kMaxCommandFields = 4;
 constexpr std::size_t kMaxCommandMessages = 5;
+constexpr std::size_t kFixedCommandRowCount = 4;
 
 enum class CommandType : std::uint8_t {
   None = 0,
@@ -29,6 +30,30 @@ enum class CommandType : std::uint8_t {
   MemAcc0C = 13,
   MemAcc10 = 14,
 };
+
+constexpr bool is_fixed_command_row(std::size_t row) {
+  return row < kFixedCommandRowCount;
+}
+
+constexpr CommandType fixed_command_type_for_row(std::size_t row) {
+  switch (row) {
+  case 0:
+    return CommandType::Volume;
+  case 1:
+    return CommandType::Pan;
+  case 2:
+    return CommandType::Mod;
+  case 3:
+    return CommandType::LfoSpeed;
+  default:
+    return CommandType::None;
+  }
+}
+
+constexpr bool is_fixed_command_type(CommandType type) {
+  return type == CommandType::Volume || type == CommandType::Pan ||
+         type == CommandType::Mod || type == CommandType::LfoSpeed;
+}
 
 enum class ParamKind : std::uint8_t {
   OutputChannel = 0,
@@ -92,10 +117,6 @@ public:
   double row_enabled_value(std::size_t row) const;
   double row_type_value(std::size_t row) const;
   double row_value_raw(std::size_t row, std::size_t field) const;
-  double row_enabled_value(std::size_t channel, std::size_t row) const;
-  double row_type_value(std::size_t channel, std::size_t row) const;
-  double row_value_raw(std::size_t channel, std::size_t row,
-                       std::size_t field) const;
 
   std::uint8_t output_channel() const;
   bool row_enabled(std::size_t row) const;
@@ -124,16 +145,10 @@ private:
     EncodedCommand lastEmitted = {};
   };
 
-  struct ChannelState {
-    std::array<RowState, kMaxCommandRows> rows = {};
-  };
-
   static std::uint8_t floor_to_u8(double value, std::uint8_t minValue,
                                   std::uint8_t maxValue);
   static CommandType floor_to_command_type(double value);
-
-  const ChannelState &active_channel_state() const;
-  ChannelState &active_channel_state();
+  static CommandType sanitize_row_type(std::size_t row, CommandType type);
   EncodedCommand encode_row(std::size_t row) const;
   bool apply_event(const AutomationEvent &event, bool *channelChanged,
                    std::array<bool, kMaxCommandRows> *rowChanged);
@@ -147,7 +162,7 @@ private:
   double outputChannelValue_ = 0.0;
   std::uint8_t lastEmittedChannel_ = 0;
   bool lastTransportPlaying_ = false;
-  std::array<ChannelState, kMidiChannelCount> channels_ = {};
+  std::array<RowState, kMaxCommandRows> rows_ = {};
 };
 
 } // namespace ccomidi

@@ -24,6 +24,7 @@ namespace ccomidi {
 constexpr std::uintptr_t kRenderTimerId = 1;
 constexpr std::uint32_t kDefaultWidth = 980;
 constexpr std::uint32_t kDefaultHeight = 620;
+constexpr float kDefaultUiScale = 1.15f;
 
 struct EditorState {
   Plugin *plugin = nullptr;
@@ -82,6 +83,10 @@ std::uint8_t floor_to_u8(double value, std::uint8_t minValue,
   if (floored >= static_cast<double>(maxValue))
     return maxValue;
   return static_cast<std::uint8_t>(floored);
+}
+
+bool is_table_command_type(CommandType type) {
+  return type == CommandType::None || !is_fixed_command_type(type);
 }
 
 void append_preview_triplet(std::string *preview, std::uint8_t channel,
@@ -270,6 +275,43 @@ void draw_editor(EditorState *editor) {
                           static_cast<double>(outputChannel - 1));
 
   ImGui::Spacing();
+  ImGui::TextUnformatted("Always Available");
+  if (ImGui::BeginTable("fixed_rows", 4,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.8f);
+    ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 2.2f);
+    ImGui::TableHeadersRow();
+
+    for (std::size_t row = 0; row < kFixedCommandRowCount; ++row) {
+      const CommandType type = fixed_command_type_for_row(row);
+
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(command_type_name(type));
+
+      ImGui::TableSetColumnIndex(1);
+      bool enabled = std::floor(snapshot.rows[row].enabled) >= 1.0;
+      if (ImGui::Checkbox(("##fixed_enabled" + std::to_string(row)).c_str(),
+                          &enabled))
+        apply_ui_param_change(editor->plugin,
+                              row_param_id(static_cast<std::uint32_t>(row),
+                                           RowParamSlot::Enabled),
+                              enabled ? 1.0 : 0.0);
+
+      ImGui::TableSetColumnIndex(2);
+      draw_parameter_controls(editor, row, type, snapshot.rows[row]);
+
+      ImGui::TableSetColumnIndex(3);
+      ImGui::TextWrapped("%s", preview_for_row(snapshot, row).c_str());
+    }
+
+    ImGui::EndTable();
+  }
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Additional Commands");
   if (ImGui::BeginTable("rows", 5,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_ScrollY)) {
@@ -283,13 +325,14 @@ void draw_editor(EditorState *editor) {
                             2.8f);
     ImGui::TableHeadersRow();
 
-    for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
+    for (std::size_t row = kFixedCommandRowCount; row < kMaxCommandRows; ++row) {
       const CommandType type = static_cast<CommandType>(
           static_cast<int>(std::floor(snapshot.rows[row].type)));
 
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::Text("%02u", static_cast<unsigned>(row + 1));
+      ImGui::Text("%02u",
+                  static_cast<unsigned>(row - kFixedCommandRowCount + 1));
 
       ImGui::TableSetColumnIndex(1);
       bool enabled = std::floor(snapshot.rows[row].enabled) >= 1.0;
@@ -307,9 +350,12 @@ void draw_editor(EditorState *editor) {
         for (int candidate = static_cast<int>(CommandType::None);
              candidate <= static_cast<int>(CommandType::MemAcc10);
              ++candidate) {
+          const auto candidateType = static_cast<CommandType>(candidate);
+          if (!is_table_command_type(candidateType))
+            continue;
           const bool selected = candidate == typeIndex;
           if (ImGui::Selectable(
-                  command_type_name(static_cast<CommandType>(candidate)),
+                  command_type_name(candidateType),
                   selected)) {
             apply_ui_param_change(editor->plugin,
                                   row_param_id(static_cast<std::uint32_t>(row),
@@ -466,8 +512,9 @@ EditorState *editor_create(Plugin *plugin) {
   ImGuiIO &io = ImGui::GetIO();
   io.IniFilename = nullptr;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.FontGlobalScale = 1.0f;
   ImGui::StyleColorsDark();
+  ImGui::GetStyle().ScaleAllSizes(kDefaultUiScale);
+  io.FontGlobalScale = kDefaultUiScale;
   ImGui_ImplPugl_Init(editor->view);
 
   return editor;

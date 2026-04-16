@@ -13,6 +13,12 @@ using ccomidi::TransportState;
 
 namespace {
 
+constexpr std::size_t kVolumeRow = 0;
+constexpr std::size_t kPanRow = 1;
+constexpr std::size_t kModRow = 2;
+constexpr std::size_t kLfoSpeedRow = 3;
+constexpr std::size_t kFirstConfigurableRow = ccomidi::kFixedCommandRowCount;
+
 int g_testsRun = 0;
 int g_testsPassed = 0;
 
@@ -49,9 +55,8 @@ AutomationEvent make_event(std::uint32_t time, ParamKind kind, std::uint8_t row,
 
 void configure_volume_row(SenderCore *core) {
   core->set_output_channel(2.0);
-  core->set_row_enabled(0, 1.0);
-  core->set_row_type(0, static_cast<double>(CommandType::Volume));
-  core->set_row_value(0, 0, 100.0);
+  core->set_row_enabled(kVolumeRow, 1.0);
+  core->set_row_value(kVolumeRow, 0, 100.0);
 }
 
 void test_start_of_playback_emits_snapshot() {
@@ -69,6 +74,24 @@ void test_start_of_playback_emits_snapshot() {
   ASSERT_EQ(planned.events[0].data2, 100, "volume row emits configured value");
 }
 
+void test_fixed_rows_emit_expected_controllers() {
+  SenderCore core;
+  PlannedEvents planned;
+  core.set_row_enabled(kPanRow, 1.0);
+  core.set_row_value(kPanRow, 0, 64.0);
+  core.set_row_enabled(kModRow, 1.0);
+  core.set_row_value(kModRow, 0, 17.0);
+  core.set_row_enabled(kLfoSpeedRow, 1.0);
+  core.set_row_value(kLfoSpeedRow, 0, 88.0);
+
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+
+  ASSERT_EQ(planned.count, 3, "fixed command rows emit without type selection");
+  ASSERT_EQ(planned.events[0].data1, 0x0A, "pan row always emits CC 10");
+  ASSERT_EQ(planned.events[1].data1, 0x01, "mod row always emits CC 1");
+  ASSERT_EQ(planned.events[2].data1, 0x15, "lfo speed row always emits CC 21");
+}
+
 void test_floor_quantization_deduplicates_automation() {
   SenderCore core;
   PlannedEvents planned;
@@ -77,11 +100,11 @@ void test_floor_quantization_deduplicates_automation() {
   core.process_block(TransportState{true}, nullptr, 0, &planned);
 
   AutomationEvent events[] = {
-      make_event(0, ParamKind::RowValue0, 0, 27.1),
-      make_event(1, ParamKind::RowValue0, 0, 27.2),
-      make_event(2, ParamKind::RowValue0, 0, 27.3),
-      make_event(3, ParamKind::RowValue0, 0, 27.7),
-      make_event(4, ParamKind::RowValue0, 0, 28.0),
+      make_event(0, ParamKind::RowValue0, kVolumeRow, 27.1),
+      make_event(1, ParamKind::RowValue0, kVolumeRow, 27.2),
+      make_event(2, ParamKind::RowValue0, kVolumeRow, 27.3),
+      make_event(3, ParamKind::RowValue0, kVolumeRow, 27.7),
+      make_event(4, ParamKind::RowValue0, kVolumeRow, 28.0),
   };
 
   core.process_block(TransportState{true}, events,
@@ -101,14 +124,14 @@ void test_channel_change_resends_snapshot() {
   PlannedEvents planned;
   configure_volume_row(&core);
   core.set_output_channel(5.0);
-  core.set_row_enabled(0, 1.0);
-  core.set_row_type(0, static_cast<double>(CommandType::Volume));
-  core.set_row_value(0, 0, 64.0);
+  core.set_row_enabled(kVolumeRow, 1.0);
+  core.set_row_value(kVolumeRow, 0, 64.0);
   core.set_output_channel(2.0);
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-  AutomationEvent event = make_event(12, ParamKind::OutputChannel, 0, 5.9);
+  AutomationEvent event =
+      make_event(12, ParamKind::OutputChannel, kVolumeRow, 5.9);
   core.process_block(TransportState{true}, &event, 1, &planned);
 
   ASSERT_EQ(planned.count, 1, "channel change resends snapshot");
@@ -123,9 +146,10 @@ void test_compound_xcmd_row_reemits_full_sequence() {
   SenderCore core;
   PlannedEvents planned;
   core.set_output_channel(3.0);
-  core.set_row_enabled(0, 1.0);
-  core.set_row_type(0, static_cast<double>(CommandType::XcmdIecv));
-  core.set_row_value(0, 0, 22.0);
+  core.set_row_enabled(kFirstConfigurableRow, 1.0);
+  core.set_row_type(kFirstConfigurableRow,
+                    static_cast<double>(CommandType::XcmdIecv));
+  core.set_row_value(kFirstConfigurableRow, 0, 22.0);
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
   ASSERT_EQ(planned.count, 2, "xcmd snapshot emits selector and data");
@@ -136,7 +160,8 @@ void test_compound_xcmd_row_reemits_full_sequence() {
             "xcmd data controller emitted second");
   ASSERT_EQ(planned.events[1].data2, 22, "xcmd data value emitted");
 
-  AutomationEvent event = make_event(8, ParamKind::RowValue0, 0, 23.9);
+  AutomationEvent event =
+      make_event(8, ParamKind::RowValue0, kFirstConfigurableRow, 23.9);
   core.process_block(TransportState{true}, &event, 1, &planned);
 
   ASSERT_EQ(planned.count, 2, "compound row change reemits the full sequence");
@@ -153,7 +178,8 @@ void test_stopped_automation_is_applied_on_next_start() {
   core.process_block(TransportState{false}, nullptr, 0, &planned);
   ASSERT_EQ(planned.count, 0, "stopped transport emits nothing");
 
-  AutomationEvent event = make_event(0, ParamKind::RowValue0, 0, 43.8);
+  AutomationEvent event =
+      make_event(0, ParamKind::RowValue0, kVolumeRow, 43.8);
   core.process_block(TransportState{false}, &event, 1, &planned);
   ASSERT_EQ(planned.count, 0, "automation while stopped does not emit");
 
@@ -168,12 +194,13 @@ void test_memacc_reemits_full_canonical_sequence() {
   SenderCore core;
   PlannedEvents planned;
   core.set_output_channel(1.0);
-  core.set_row_enabled(0, 1.0);
-  core.set_row_type(0, static_cast<double>(CommandType::MemAcc0C));
-  core.set_row_value(0, 0, 1.0);
-  core.set_row_value(0, 1, 16.0);
-  core.set_row_value(0, 2, 32.0);
-  core.set_row_value(0, 3, 64.0);
+  core.set_row_enabled(kFirstConfigurableRow, 1.0);
+  core.set_row_type(kFirstConfigurableRow,
+                    static_cast<double>(CommandType::MemAcc0C));
+  core.set_row_value(kFirstConfigurableRow, 0, 1.0);
+  core.set_row_value(kFirstConfigurableRow, 1, 16.0);
+  core.set_row_value(kFirstConfigurableRow, 2, 32.0);
+  core.set_row_value(kFirstConfigurableRow, 3, 64.0);
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
   ASSERT_EQ(planned.count, 4, "memacc emits full setup sequence");
@@ -182,7 +209,8 @@ void test_memacc_reemits_full_canonical_sequence() {
   ASSERT_EQ(planned.events[2].data1, 0x0F, "memacc param2 byte emitted");
   ASSERT_EQ(planned.events[3].data1, 0x0C, "memacc trigger byte emitted");
 
-  AutomationEvent event = make_event(9, ParamKind::RowValue3, 0, 80.9);
+  AutomationEvent event =
+      make_event(9, ParamKind::RowValue3, kFirstConfigurableRow, 80.9);
   core.process_block(TransportState{true}, &event, 1, &planned);
   ASSERT_EQ(planned.count, 4, "memacc change reemits all setup bytes");
   ASSERT_EQ(planned.events[3].data2, 80, "memacc trigger value is floored");
@@ -207,17 +235,17 @@ void test_preapplied_channel_change_resends_snapshot() {
   PlannedEvents planned;
   configure_volume_row(&core);
   core.set_output_channel(7.0);
-  core.set_row_enabled(0, 1.0);
-  core.set_row_type(0, static_cast<double>(CommandType::Volume));
-  core.set_row_value(0, 0, 45.0);
+  core.set_row_enabled(kVolumeRow, 1.0);
+  core.set_row_value(kVolumeRow, 0, 45.0);
   core.set_output_channel(2.0);
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
 
   std::array<bool, ccomidi::kMaxCommandRows> rowChanged = {};
   bool channelChanged = false;
-  core.apply_parameter_change(make_event(0, ParamKind::OutputChannel, 0, 7.2),
-                              &channelChanged, &rowChanged);
+  core.apply_parameter_change(
+      make_event(0, ParamKind::OutputChannel, kVolumeRow, 7.2),
+      &channelChanged, &rowChanged);
   core.emit_preapplied_changes(true, channelChanged, rowChanged, 0, &planned);
 
   ASSERT_EQ(planned.count, 1, "preapplied channel change resends snapshot");
@@ -227,48 +255,65 @@ void test_preapplied_channel_change_resends_snapshot() {
             "preapplied resend carries selected channel bank value");
 }
 
-void test_channel_switch_uses_independent_channel_banks() {
+void test_fixed_rows_reject_type_changes() {
+  SenderCore core;
+  std::array<bool, ccomidi::kMaxCommandRows> rowChanged = {};
+  bool channelChanged = false;
+
+  core.set_row_type(kVolumeRow, static_cast<double>(CommandType::Tune));
+  ASSERT_EQ(static_cast<int>(core.row_type(kVolumeRow)),
+            static_cast<int>(CommandType::Volume),
+            "fixed volume row ignores direct type changes");
+
+  const bool changed = core.apply_parameter_change(
+      make_event(0, ParamKind::RowType, kVolumeRow,
+                 static_cast<double>(CommandType::MemAcc0C)),
+      &channelChanged, &rowChanged);
+  ASSERT_TRUE(!changed, "fixed row type automation is ignored");
+  ASSERT_TRUE(!channelChanged, "fixed row type automation is not a channel change");
+  ASSERT_TRUE(!rowChanged[kVolumeRow], "fixed row type automation does not mark row dirty");
+}
+
+void test_channel_switch_keeps_single_command_bank() {
   SenderCore core;
   PlannedEvents planned;
+  configure_volume_row(&core);
 
   core.set_output_channel(0.0);
-  core.set_row_enabled(0, 1.0);
-  core.set_row_type(0, static_cast<double>(CommandType::ModType));
-  core.set_row_value(0, 0, 10.0);
-
-  core.set_output_channel(1.0);
-  ASSERT_EQ(static_cast<int>(core.row_value_raw(0, 0)), 0,
-            "new channel starts with its own default value");
-
-  core.set_row_enabled(0, 1.0);
-  core.set_row_type(0, static_cast<double>(CommandType::ModType));
-  core.set_row_value(0, 0, 25.0);
-
-  core.set_output_channel(0.0);
-  ASSERT_EQ(static_cast<int>(core.row_value_raw(0, 0)), 10,
-            "switching back restores channel 1 value");
+  ASSERT_EQ(static_cast<int>(core.row_value_raw(kVolumeRow, 0)), 100,
+            "changing output channel does not change stored volume value");
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
-  ASSERT_EQ(planned.count, 1, "playback snapshot emits active channel bank");
+  ASSERT_EQ(planned.count, 1, "playback snapshot emits active single bank");
   ASSERT_EQ(planned.events[0].status, 0xB0,
-            "snapshot uses selected output channel");
-  ASSERT_EQ(planned.events[0].data1, 0x16, "mod type emits CC 22");
-  ASSERT_EQ(planned.events[0].data2, 10, "channel 1 bank value is preserved");
+            "snapshot uses current output channel");
+  ASSERT_EQ(planned.events[0].data2, 100,
+            "snapshot keeps the configured single-bank value");
 
-  AutomationEvent switchEvent = make_event(5, ParamKind::OutputChannel, 0, 1.0);
+  AutomationEvent switchEvent =
+      make_event(5, ParamKind::OutputChannel, kVolumeRow, 1.0);
   core.process_block(TransportState{true}, &switchEvent, 1, &planned);
-  ASSERT_EQ(planned.count, 1,
-            "switching active channel resends selected channel bank");
+  ASSERT_EQ(planned.count, 1, "channel switch resends the same single-bank snapshot");
   ASSERT_EQ(planned.events[0].status, 0xB1,
-            "switch resend uses channel 2 status");
-  ASSERT_EQ(planned.events[0].data2, 25,
-            "switch resend uses channel 2 bank value");
+            "switch resend uses the new output channel");
+  ASSERT_EQ(planned.events[0].data2, 100,
+            "switch resend preserves the configured value");
+}
+
+void test_configurable_rows_reject_fixed_command_types() {
+  SenderCore core;
+
+  core.set_row_type(kFirstConfigurableRow, static_cast<double>(CommandType::Pan));
+  ASSERT_EQ(static_cast<int>(core.row_type(kFirstConfigurableRow)),
+            static_cast<int>(CommandType::None),
+            "configurable rows cannot be reassigned to fixed commands");
 }
 
 } // namespace
 
 int main() {
   test_start_of_playback_emits_snapshot();
+  test_fixed_rows_emit_expected_controllers();
   test_floor_quantization_deduplicates_automation();
   test_channel_change_resends_snapshot();
   test_compound_xcmd_row_reemits_full_sequence();
@@ -276,7 +321,9 @@ int main() {
   test_memacc_reemits_full_canonical_sequence();
   test_runtime_reset_preserves_parameter_values();
   test_preapplied_channel_change_resends_snapshot();
-  test_channel_switch_uses_independent_channel_banks();
+  test_fixed_rows_reject_type_changes();
+  test_channel_switch_keeps_single_command_bank();
+  test_configurable_rows_reject_fixed_command_types();
 
   std::printf("Passed %d/%d tests\n", g_testsPassed, g_testsRun);
   return g_testsPassed == g_testsRun ? EXIT_SUCCESS : EXIT_FAILURE;

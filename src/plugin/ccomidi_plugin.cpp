@@ -10,13 +10,16 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <stdexcept>
 
 #include <vector>
 
+#include "core/command_spec.h"
 #include "core/sender_core.h"
 #include "gui/ccomidi_editor.h"
 #include "plugin/ccomidi_plugin_shared.h"
@@ -29,42 +32,9 @@ constexpr std::uint32_t kStateVersion = 5;
 Plugin *from_plugin(const clap_plugin_t *plugin) {
   return plugin ? static_cast<Plugin *>(plugin->plugin_data) : nullptr;
 }
-// const param_rules {}
+/* Name of CC */
 const char *command_type_name(CommandType type) {
-  switch (type) {
-  case CommandType::None:
-    return "None";
-  case CommandType::Mod:
-    return "Mod";
-  case CommandType::Volume:
-    return "Volume";
-  case CommandType::Pan:
-    return "Pan";
-  case CommandType::BendRange:
-    return "BendRange";
-  case CommandType::LfoSpeed:
-    return "LfoSpeed";
-  case CommandType::ModType:
-    return "ModType";
-  case CommandType::Tune:
-    return "Tune";
-  case CommandType::LfoDelay:
-    return "LfoDelay";
-  case CommandType::Priority21:
-    return "Priority21";
-  case CommandType::Priority27:
-    return "Priority27";
-  case CommandType::XcmdIecv:
-    return "XcmdIecv";
-  case CommandType::XcmdIecl:
-    return "XcmdIecl";
-  case CommandType::MemAcc0C:
-    return "MemAcc0C";
-  case CommandType::MemAcc10:
-    return "MemAcc10";
-  }
-
-  return "Unknown";
+  return kCommandSpecs[static_cast<uint8_t>(type)].displayName;
 }
 
 const char *fixed_row_name(std::size_t row) {
@@ -87,9 +57,14 @@ bool should_rescan_param_info(const ParamAddress &address) {
   return address.kind == ParamKind::OutputChannel ||
          (address.kind == ParamKind::RowType &&
           row_has_dynamic_type(address.row));
-}
+};
 
 const char *command_field_name(CommandType type, std::uint32_t field) {
+  // const CommandSpec &spec = command_spec(type);
+  // if (field > spec.fieldCount) {
+  //   throw std::out_of_range(
+  //       "command_field_name: CC command does not have field number");
+  // };
   switch (type) {
   case CommandType::MemAcc0C:
   case CommandType::MemAcc10:
@@ -113,6 +88,8 @@ const char *command_field_name(CommandType type, std::uint32_t field) {
     break;
   }
 
+  const auto &fieldName = command_spec(type);
+  // When not a multi-param cc AND
   switch (field) {
   case 0:
     return "Value A";
@@ -295,10 +272,7 @@ clap_param_info_flags param_flags_for_id(clap_id id) {
     return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS;
   }
 }
-void get_param_limits(ParamAddress &address, CommandType rowCommand,
-                      uint32_t field) {
-  auto x = address.kind;
-};
+
 void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
   std::memset(info, 0, sizeof(*info));
   info->id = id;
@@ -603,10 +577,9 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
     self->pendingUiProgramChange = false;
     self->pendingUiRowChanged.fill(false);
     if (initialPlaying && wasPlaying) {
-      self->core.emit_preapplied_changes(true, pendingUiChannelChange,
-                                         pendingUiRowChanged, 0,
-                                         &pendingUiEvents,
-                                         pendingUiProgramChange);
+      self->core.emit_preapplied_changes(
+          true, pendingUiChannelChange, pendingUiRowChanged, 0,
+          &pendingUiEvents, pendingUiProgramChange);
     }
   }
 
@@ -957,11 +930,6 @@ const clap_plugin_audio_ports_t s_audioPorts = {
     .get = audio_ports_get,
 };
 
-std::uint32_t note_ports_count(const clap_plugin_t *plugin, bool isInput) {
-  (void)plugin;
-  return 1u;
-}
-
 bool note_ports_get(const clap_plugin_t *plugin, std::uint32_t index,
                     bool isInput, clap_note_port_info_t *info) {
   (void)plugin;
@@ -976,7 +944,11 @@ bool note_ports_get(const clap_plugin_t *plugin, std::uint32_t index,
                 isInput ? "MIDI Input" : "MIDI Output");
   return true;
 }
-
+std::uint32_t note_ports_count(const clap_plugin_t *plugin, bool isInput) {
+  (void)plugin;
+  (void)isInput;
+  return 1u;
+}
 const clap_plugin_note_ports_t s_notePorts = {
     .count = note_ports_count,
     .get = note_ports_get,

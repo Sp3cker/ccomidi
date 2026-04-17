@@ -1,10 +1,10 @@
 #ifndef CCOMIDI_SENDER_CORE_H
 #define CCOMIDI_SENDER_CORE_H
 
+#include "core/command_spec.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
-
 namespace ccomidi {
 
 constexpr std::size_t kMidiChannelCount = 16;
@@ -12,24 +12,6 @@ constexpr std::size_t kMaxCommandRows = 16;
 constexpr std::size_t kMaxCommandFields = 4;
 constexpr std::size_t kMaxCommandMessages = 5;
 constexpr std::size_t kFixedCommandRowCount = 4;
-
-enum class CommandType : std::uint8_t {
-  None = 0,
-  Mod = 1,
-  Volume = 2,
-  Pan = 3,
-  BendRange = 4,
-  LfoSpeed = 5,
-  ModType = 6,
-  Tune = 7,
-  LfoDelay = 8,
-  Priority21 = 9,
-  Priority27 = 10,
-  XcmdIecv = 11,
-  XcmdIecl = 12,
-  MemAcc0C = 13,
-  MemAcc10 = 14,
-};
 
 constexpr bool is_fixed_command_row(std::size_t row) {
   return row < kFixedCommandRowCount;

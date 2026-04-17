@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(PUGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pugl")
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
 set(CLAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap/include")
+add_compile_options(-Wall -Wextra -Wunused-variable -Wunused-function -g)
 
 if(WIN32)
     set(PUGL_PLATFORM_SOURCES

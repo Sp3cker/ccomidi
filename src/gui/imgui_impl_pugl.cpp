@@ -6,6 +6,11 @@
 
 #include <pugl/gl.h>
 
+#ifdef __APPLE__
+extern "C" const char *ccomidi_mac_clipboard_get_text(void);
+extern "C" void ccomidi_mac_clipboard_set_text(const char *text);
+#endif
+
 struct ImGui_ImplPugl_Data {
   PuglView *view = nullptr;
   double time = 0.0;
@@ -20,18 +25,26 @@ static ImGui_ImplPugl_Data *ImGui_ImplPugl_GetBackendData() {
 }
 
 static const char *ImGui_ImplPugl_GetClipboardText(void *) {
+#ifdef __APPLE__
+  return ccomidi_mac_clipboard_get_text();
+#else
   ImGui_ImplPugl_Data *bd = ImGui_ImplPugl_GetBackendData();
   if (!bd)
     return "";
   puglPaste(bd->view);
   return bd->clipboardText.c_str();
+#endif
 }
 
 static void ImGui_ImplPugl_SetClipboardText(void *, const char *text) {
+#ifdef __APPLE__
+  ccomidi_mac_clipboard_set_text(text);
+#else
   ImGui_ImplPugl_Data *bd = ImGui_ImplPugl_GetBackendData();
   if (!bd)
     return;
   puglSetClipboard(bd->view, "text/plain", text, std::strlen(text) + 1);
+#endif
 }
 
 static ImGuiKey PuglKeyToImGuiKey(std::uint32_t key) {

@@ -12,6 +12,9 @@ namespace ccomidi {
 constexpr clap_id kParamOutputChannel = 0;
 constexpr std::uint32_t kParamsPerRow = 6;
 constexpr clap_id kFirstRowParam = 1;
+constexpr clap_id kParamProgram =
+    kFirstRowParam + kMaxCommandRows * kParamsPerRow;
+constexpr clap_id kParamProgramEnabled = kParamProgram + 1;
 
 enum class RowParamSlot : std::uint32_t {
   Enabled = 0,
@@ -29,7 +32,7 @@ constexpr clap_id row_param_id(std::uint32_t row, RowParamSlot slot) {
 }
 
 constexpr std::uint32_t total_param_count() {
-  return 1 + static_cast<std::uint32_t>(kMaxCommandRows) * kParamsPerRow;
+  return 3 + static_cast<std::uint32_t>(kMaxCommandRows) * kParamsPerRow;
 }
 // ID is the index of the automation.
 // Its divided by kParamsPerRow to know which row/command its for
@@ -40,6 +43,18 @@ inline bool decode_param_id(clap_id id, ParamAddress *address) {
 
   if (id == kParamOutputChannel) {
     address->kind = ParamKind::OutputChannel;
+    address->row = 0;
+    return true;
+  }
+
+  if (id == kParamProgram) {
+    address->kind = ParamKind::Program;
+    address->row = 0;
+    return true;
+  }
+
+  if (id == kParamProgramEnabled) {
+    address->kind = ParamKind::ProgramEnabled;
     address->row = 0;
     return true;
   }

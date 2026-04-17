@@ -20,6 +20,8 @@ struct UiRowSnapshot {
 
 struct UiSnapshot {
   double outputChannel = 0.0;
+  double program = 0.0;
+  double programEnabled = 1.0;
   std::array<UiRowSnapshot, kMaxCommandRows> rows = {};
 };
 
@@ -32,6 +34,7 @@ struct Plugin {
   EditorState *editor = nullptr;
   clap_id guiTimerId = CLAP_INVALID_ID;
   bool pendingUiChannelChange = false;
+  bool pendingUiProgramChange = false;
   std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
   bool pendingParamInfoRescan = false;
 };

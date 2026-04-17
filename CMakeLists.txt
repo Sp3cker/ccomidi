@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PUGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pugl")
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
+set(CLAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap/include")
 
 if(WIN32)
     set(PUGL_PLATFORM_SOURCES
@@ -63,17 +64,14 @@ target_link_libraries(ccomidi_core_tests PRIVATE
     ccomidi_core
 )
 
-set(CLAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap/include")
-
-add_library(ccomidi MODULE
-    src/plugin/ccomidi_plugin.cpp
-    src/gui/ccomidi_editor.cpp
-    src/gui/imgui_impl_pugl.cpp
-    ${IMGUI_SOURCES}
+add_library(ccomidi_gui STATIC
     ${PUGL_SOURCES}
+    ${IMGUI_SOURCES}
+    src/gui/imgui_impl_pugl.cpp
+    src/gui/editor_shell.cpp
 )
 
-target_include_directories(ccomidi PRIVATE
+target_include_directories(ccomidi_gui PUBLIC
     src
     ${CLAP_SDK_DIR}
     ${IMGUI_DIR}
@@ -82,16 +80,31 @@ target_include_directories(ccomidi PRIVATE
     ${PUGL_DIR}/src
 )
 
+target_compile_definitions(ccomidi_gui PUBLIC
+    PUGL_STATIC
+)
+
 if(APPLE)
-    set_source_files_properties(src/gui/ccomidi_editor.cpp PROPERTIES LANGUAGE OBJCXX)
+    set_source_files_properties(src/gui/editor_shell.cpp PROPERTIES LANGUAGE OBJCXX)
+    target_link_libraries(ccomidi_gui PUBLIC
+        "-framework Cocoa"
+        "-framework Metal"
+        "-framework QuartzCore"
+    )
+elseif(WIN32)
+    target_link_libraries(ccomidi_gui PUBLIC opengl32)
+else()
+    target_link_libraries(ccomidi_gui PUBLIC GL X11 Xcursor Xrandr Xext)
 endif()
+
+add_library(ccomidi MODULE
+    src/plugin/ccomidi_plugin.cpp
+    src/gui/ccomidi_editor.cpp
+)
 
 target_link_libraries(ccomidi PRIVATE
     ccomidi_core
-)
-
-target_compile_definitions(ccomidi PRIVATE
-    PUGL_STATIC
+    ccomidi_gui
 )
 
 set_target_properties(ccomidi PROPERTIES
@@ -104,18 +117,69 @@ if(APPLE)
         BUNDLE TRUE
         BUNDLE_EXTENSION "clap"
     )
-    target_link_libraries(ccomidi PRIVATE
-        "-framework Cocoa"
-        "-framework Metal"
-        "-framework QuartzCore"
-    )
     add_custom_command(TARGET ccomidi POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/Info.plist"
             "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi>/Info.plist"
     )
-elseif(WIN32)
-    target_link_libraries(ccomidi PRIVATE opengl32)
-else()
-    target_link_libraries(ccomidi PRIVATE GL X11 Xcursor Xrandr Xext)
+endif()
+
+set(MIDIFILE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/midifile")
+
+add_library(midifile STATIC
+    ${MIDIFILE_DIR}/src/MidiFile.cpp
+    ${MIDIFILE_DIR}/src/MidiEvent.cpp
+    ${MIDIFILE_DIR}/src/MidiEventList.cpp
+    ${MIDIFILE_DIR}/src/MidiMessage.cpp
+    ${MIDIFILE_DIR}/src/Binasc.cpp
+    ${MIDIFILE_DIR}/src/Options.cpp
+)
+
+target_include_directories(midifile PUBLIC
+    ${MIDIFILE_DIR}/include
+)
+
+add_library(ccomidi_recorder_core STATIC
+    src/recorder/recorder_core.cpp
+    src/recorder/smf_writer.cpp
+)
+
+target_include_directories(ccomidi_recorder_core PUBLIC
+    src
+)
+
+target_link_libraries(ccomidi_recorder_core PRIVATE
+    midifile
+)
+
+add_library(ccomidi_recorder MODULE
+    src/plugin/recorder/recorder_plugin.cpp
+    src/plugin/recorder/recorder_editor.cpp
+)
+
+target_include_directories(ccomidi_recorder PRIVATE
+    ${CLAP_SDK_DIR}
+)
+
+target_link_libraries(ccomidi_recorder PRIVATE
+    ccomidi_recorder_core
+    ccomidi_gui
+)
+
+set_target_properties(ccomidi_recorder PROPERTIES
+    PREFIX ""
+    SUFFIX ".clap"
+    OUTPUT_NAME "ccomidi_recorder"
+)
+
+if(APPLE)
+    set_target_properties(ccomidi_recorder PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION "clap"
+    )
+    add_custom_command(TARGET ccomidi_recorder POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/recorder/Info.plist"
+            "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi_recorder>/Info.plist"
+    )
 endif()

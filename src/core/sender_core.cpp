@@ -40,12 +40,16 @@ SenderCore::SenderCore() { reset(); }
 
 void SenderCore::reset() {
   outputChannelValue_ = 0.0;
+  programValue_ = 0.0;
+  programEnabledValue_ = 1.0;
   rows_ = {};
   reset_runtime_state();
 }
 
 void SenderCore::reset_runtime_state() {
   lastEmittedChannel_ = output_channel();
+  lastEmittedProgram_ = program();
+  lastEmittedProgramValid_ = false;
   lastTransportPlaying_ = false;
   for (RowState &row : rows_) {
     row.lastEmittedValid = false;
@@ -55,6 +59,12 @@ void SenderCore::reset_runtime_state() {
 
 void SenderCore::set_output_channel(double value) {
   outputChannelValue_ = value;
+}
+
+void SenderCore::set_program(double value) { programValue_ = value; }
+
+void SenderCore::set_program_enabled(double value) {
+  programEnabledValue_ = value;
 }
 
 void SenderCore::set_row_enabled(std::size_t row, double value) {
@@ -79,6 +89,12 @@ void SenderCore::set_row_value(std::size_t row, std::size_t field,
 
 double SenderCore::output_channel_value() const { return outputChannelValue_; }
 
+double SenderCore::program_value() const { return programValue_; }
+
+double SenderCore::program_enabled_value() const {
+  return programEnabledValue_;
+}
+
 double SenderCore::row_enabled_value(std::size_t row) const {
   if (row >= kMaxCommandRows)
     return 0.0;
@@ -99,6 +115,14 @@ double SenderCore::row_value_raw(std::size_t row, std::size_t field) const {
 
 std::uint8_t SenderCore::output_channel() const {
   return floor_to_u8(outputChannelValue_, 0, 15);
+}
+
+std::uint8_t SenderCore::program() const {
+  return floor_to_u8(programValue_, 0, 127);
+}
+
+bool SenderCore::program_enabled() const {
+  return floor_to_u8(programEnabledValue_, 0, 1) != 0;
 }
 
 bool SenderCore::row_enabled(std::size_t row) const {
@@ -214,9 +238,12 @@ SenderCore::EncodedCommand SenderCore::encode_row(std::size_t row) const {
 }
 
 bool SenderCore::apply_event(const AutomationEvent &event, bool *channelChanged,
-                             std::array<bool, kMaxCommandRows> *rowChanged) {
+                             std::array<bool, kMaxCommandRows> *rowChanged,
+                             bool *programChanged) {
   if (channelChanged)
     *channelChanged = false;
+  if (programChanged)
+    *programChanged = false;
   std::array<bool, kMaxCommandRows> localRowChanged = {};
   if (!rowChanged)
     rowChanged = &localRowChanged;
@@ -228,6 +255,22 @@ bool SenderCore::apply_event(const AutomationEvent &event, bool *channelChanged,
     const std::uint8_t after = output_channel();
     if (channelChanged)
       *channelChanged = (before != after);
+    return before != after;
+  }
+  case ParamKind::Program: {
+    const std::uint8_t before = program();
+    programValue_ = event.value;
+    const std::uint8_t after = program();
+    if (programChanged)
+      *programChanged = (before != after);
+    return before != after;
+  }
+  case ParamKind::ProgramEnabled: {
+    const bool before = program_enabled();
+    programEnabledValue_ = event.value;
+    const bool after = program_enabled();
+    if (programChanged)
+      *programChanged = (before != after);
     return before != after;
   }
   case ParamKind::RowEnabled:
@@ -291,8 +334,22 @@ void SenderCore::append_encoded(std::uint32_t time,
   }
 }
 
+void SenderCore::emit_program_change(std::uint32_t time, PlannedEvents *out) {
+  if (!out || !program_enabled() || out->count >= out->events.size())
+    return;
+
+  MidiEvent &event = out->events[out->count++];
+  event.time = time;
+  event.status = static_cast<std::uint8_t>(0xC0 | output_channel());
+  event.data1 = program();
+  event.data2 = 0;
+  lastEmittedProgram_ = program();
+  lastEmittedProgramValid_ = true;
+}
+
 void SenderCore::emit_snapshot(std::uint32_t time, PlannedEvents *out) {
   lastEmittedChannel_ = output_channel();
+  emit_program_change(time, out);
 
   for (std::size_t row = 0; row < rows_.size(); ++row) {
     EncodedCommand encoded = encode_row(row);
@@ -349,12 +406,16 @@ void SenderCore::process_block(const TransportState &transport,
             : events[eventIndex].time;
 
     bool channelChanged = false;
+    bool programChanged = false;
     std::array<bool, kMaxCommandRows> rowChanged = {};
 
     while (eventIndex < eventCount && events[eventIndex].time == currentTime) {
       bool localChannelChanged = false;
-      apply_event(events[eventIndex], &localChannelChanged, &rowChanged);
+      bool localProgramChanged = false;
+      apply_event(events[eventIndex], &localChannelChanged, &rowChanged,
+                  &localProgramChanged);
       channelChanged = channelChanged || localChannelChanged;
+      programChanged = programChanged || localProgramChanged;
       ++eventIndex;
     }
 
@@ -369,6 +430,8 @@ void SenderCore::process_block(const TransportState &transport,
       if (channelChanged) {
         emit_snapshot(currentTime, out);
       } else {
+        if (programChanged)
+          emit_program_change(currentTime, out);
         emit_changed_rows(currentTime, rowChanged, out);
       }
     }
@@ -382,22 +445,25 @@ void SenderCore::process_block(const TransportState &transport,
 
 bool SenderCore::apply_parameter_change(
     const AutomationEvent &event, bool *channelChanged,
-    std::array<bool, kMaxCommandRows> *rowChanged) {
-  return apply_event(event, channelChanged, rowChanged);
+    std::array<bool, kMaxCommandRows> *rowChanged, bool *programChanged) {
+  return apply_event(event, channelChanged, rowChanged, programChanged);
 }
 
 void SenderCore::emit_preapplied_changes(
     bool transportIsPlaying, bool channelChanged,
     const std::array<bool, kMaxCommandRows> &rowChanged, std::uint32_t time,
-    PlannedEvents *out) {
+    PlannedEvents *out, bool programChanged) {
   if (!transportIsPlaying || !out)
     return;
 
   out->clear();
-  if (channelChanged)
+  if (channelChanged) {
     emit_snapshot(time, out);
-  else
+  } else {
+    if (programChanged)
+      emit_program_change(time, out);
     emit_changed_rows(time, rowChanged, out);
+  }
 }
 
 bool SenderCore::runtime_was_playing() const { return lastTransportPlaying_; }

@@ -63,6 +63,8 @@ enum class ParamKind : std::uint8_t {
   RowValue1 = 4,
   RowValue2 = 5,
   RowValue3 = 6,
+  Program = 7,
+  ProgramEnabled = 8,
 };
 
 struct ParamAddress {
@@ -109,16 +111,22 @@ public:
   void reset_runtime_state();
 
   void set_output_channel(double value);
+  void set_program(double value);
+  void set_program_enabled(double value);
   void set_row_enabled(std::size_t row, double value);
   void set_row_type(std::size_t row, double value);
   void set_row_value(std::size_t row, std::size_t field, double value);
 
   double output_channel_value() const;
+  double program_value() const;
+  double program_enabled_value() const;
   double row_enabled_value(std::size_t row) const;
   double row_type_value(std::size_t row) const;
   double row_value_raw(std::size_t row, std::size_t field) const;
 
   std::uint8_t output_channel() const;
+  std::uint8_t program() const;
+  bool program_enabled() const;
   bool row_enabled(std::size_t row) const;
   CommandType row_type(std::size_t row) const;
   std::uint8_t row_value(std::size_t row, std::size_t field) const;
@@ -128,11 +136,13 @@ public:
                      PlannedEvents *out);
   bool apply_parameter_change(const AutomationEvent &event,
                               bool *channelChanged,
-                              std::array<bool, kMaxCommandRows> *rowChanged);
+                              std::array<bool, kMaxCommandRows> *rowChanged,
+                              bool *programChanged = nullptr);
   void
   emit_preapplied_changes(bool transportIsPlaying, bool channelChanged,
                           const std::array<bool, kMaxCommandRows> &rowChanged,
-                          std::uint32_t time, PlannedEvents *out);
+                          std::uint32_t time, PlannedEvents *out,
+                          bool programChanged = false);
   bool runtime_was_playing() const;
 
 private:
@@ -151,16 +161,22 @@ private:
   static CommandType sanitize_row_type(std::size_t row, CommandType type);
   EncodedCommand encode_row(std::size_t row) const;
   bool apply_event(const AutomationEvent &event, bool *channelChanged,
-                   std::array<bool, kMaxCommandRows> *rowChanged);
+                   std::array<bool, kMaxCommandRows> *rowChanged,
+                   bool *programChanged);
   void emit_snapshot(std::uint32_t time, PlannedEvents *out);
   void emit_changed_rows(std::uint32_t time,
                          const std::array<bool, kMaxCommandRows> &rowChanged,
                          PlannedEvents *out);
+  void emit_program_change(std::uint32_t time, PlannedEvents *out);
   void append_encoded(std::uint32_t time, const EncodedCommand &encoded,
                       PlannedEvents *out);
 
   double outputChannelValue_ = 0.0;
+  double programValue_ = 0.0;
+  double programEnabledValue_ = 1.0;
   std::uint8_t lastEmittedChannel_ = 0;
+  std::uint8_t lastEmittedProgram_ = 0;
+  bool lastEmittedProgramValid_ = false;
   bool lastTransportPlaying_ = false;
   std::array<RowState, kMaxCommandRows> rows_ = {};
 };

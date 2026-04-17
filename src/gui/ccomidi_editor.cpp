@@ -1,47 +1,22 @@
 #include "gui/ccomidi_editor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
+#include <cstdint>
 #include <string>
-
-#ifdef __APPLE__
-#include "gui/metal/pugl_mac_metal.h"
-#include "imgui_impl_metal.h"
-#else
-#include "backends/imgui_impl_opengl3.h"
-#include <pugl/gl.h>
-#endif
-#include <pugl/pugl.h>
 
 #include "imgui.h"
 
-#include "gui/imgui_impl_pugl.h"
+#include "gui/editor_shell.h"
 #include "plugin/param_ids.h"
 
 namespace ccomidi {
 
-constexpr std::uintptr_t kRenderTimerId = 1;
+namespace {
+
 constexpr std::uint32_t kDefaultWidth = 980;
 constexpr std::uint32_t kDefaultHeight = 620;
-constexpr float kDefaultUiScale = 1.15f;
-
-struct EditorState {
-  Plugin *plugin = nullptr;
-  const clap_host_t *host = nullptr;
-  PuglWorld *world = nullptr;
-  PuglView *view = nullptr;
-  ImGuiContext *imgui = nullptr;
-  bool realized = false;
-  bool renderInited = false;
-  bool embedded = false;
-  bool wasClosed = false;
-  bool destroying = false;
-  std::uint32_t width = kDefaultWidth;
-  std::uint32_t height = kDefaultHeight;
-};
-
-namespace {
 
 int field_count_for_type(CommandType type) {
   switch (type) {
@@ -174,8 +149,7 @@ std::string preview_for_row(const UiSnapshot &snapshot, std::size_t row) {
   return preview;
 }
 
-void draw_parameter_controls(EditorState *editor, std::size_t row,
-                             CommandType type,
+void draw_parameter_controls(Plugin *plugin, std::size_t row, CommandType type,
                              const UiRowSnapshot &rowSnapshot) {
   const int activeFields = field_count_for_type(type);
   if (activeFields == 0) {
@@ -191,7 +165,7 @@ void draw_parameter_controls(EditorState *editor, std::size_t row,
     if (ImGui::SliderInt(label.c_str(), &value, 0, 127, "%d",
                          ImGuiSliderFlags_AlwaysClamp)) {
       apply_ui_param_change(
-          editor->plugin,
+          plugin,
           row_param_id(static_cast<std::uint32_t>(row), RowParamSlot::Value0),
           value);
     }
@@ -215,7 +189,7 @@ void draw_parameter_controls(EditorState *editor, std::size_t row,
     if (ImGui::SliderInt(label.c_str(), &value, 0, 127, "%d",
                          ImGuiSliderFlags_AlwaysClamp)) {
       apply_ui_param_change(
-          editor->plugin,
+          plugin,
           row_param_id(static_cast<std::uint32_t>(row),
                        static_cast<RowParamSlot>(
                            static_cast<int>(RowParamSlot::Value0) + field)),
@@ -225,39 +199,17 @@ void draw_parameter_controls(EditorState *editor, std::size_t row,
   }
 }
 
-bool is_plain_space_key(const PuglEvent *event) {
-  if (!event || event->type != PUGL_KEY_PRESS)
-    return false;
-  const PuglMods mods = event->key.state;
-  return event->key.key == PUGL_KEY_SPACE &&
-         (mods & (PUGL_MOD_SHIFT | PUGL_MOD_CTRL | PUGL_MOD_ALT |
-                  PUGL_MOD_SUPER)) == 0;
-}
-
-void draw_editor(EditorState *editor) {
-  if (!editor || !editor->plugin)
+void draw_frame(void *userData, std::uint32_t width, std::uint32_t height) {
+  auto *plugin = static_cast<Plugin *>(userData);
+  if (!plugin)
     return;
 
   UiSnapshot snapshot = {};
-  fill_ui_snapshot(editor->plugin, &snapshot);
-
-#ifdef __APPLE__
-  auto *metalContext =
-      static_cast<PuglMetalContext *>(puglGetContext(editor->view));
-  if (!metalContext || !metalContext->renderPassDescriptor ||
-      !metalContext->commandBuffer || !metalContext->renderEncoder) {
-    return;
-  }
-  ImGui_ImplMetal_NewFrame(metalContext->renderPassDescriptor);
-#else
-  ImGui_ImplOpenGL3_NewFrame();
-#endif
-  ImGui_ImplPugl_NewFrame();
-  ImGui::NewFrame();
+  fill_ui_snapshot(plugin, &snapshot);
 
   ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-  ImGui::SetNextWindowSize(ImVec2(static_cast<float>(editor->width),
-                                  static_cast<float>(editor->height)));
+  ImGui::SetNextWindowSize(
+      ImVec2(static_cast<float>(width), static_cast<float>(height)));
   const ImGuiWindowFlags flags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
@@ -271,8 +223,21 @@ void draw_editor(EditorState *editor) {
 
   int outputChannel = static_cast<int>(std::floor(snapshot.outputChannel)) + 1;
   if (ImGui::SliderInt("Output Channel", &outputChannel, 1, 16))
-    apply_ui_param_change(editor->plugin, kParamOutputChannel,
+    apply_ui_param_change(plugin, kParamOutputChannel,
                           static_cast<double>(outputChannel - 1));
+
+  bool programEnabled = std::floor(snapshot.programEnabled) >= 1.0;
+  if (ImGui::Checkbox("Emit Program Change", &programEnabled))
+    apply_ui_param_change(plugin, kParamProgramEnabled,
+                          programEnabled ? 1.0 : 0.0);
+
+  int program = static_cast<int>(std::floor(snapshot.program));
+  ImGui::BeginDisabled(!programEnabled);
+  if (ImGui::InputInt("Program", &program, 1, 8)) {
+    program = std::clamp(program, 0, 127);
+    apply_ui_param_change(plugin, kParamProgram, static_cast<double>(program));
+  }
+  ImGui::EndDisabled();
 
   ImGui::Spacing();
 
@@ -297,13 +262,13 @@ void draw_editor(EditorState *editor) {
       bool enabled = std::floor(snapshot.rows[row].enabled) >= 1.0;
       if (ImGui::Checkbox(("##fixed_enabled" + std::to_string(row)).c_str(),
                           &enabled))
-        apply_ui_param_change(editor->plugin,
+        apply_ui_param_change(plugin,
                               row_param_id(static_cast<std::uint32_t>(row),
                                            RowParamSlot::Enabled),
                               enabled ? 1.0 : 0.0);
 
       ImGui::TableSetColumnIndex(2);
-      draw_parameter_controls(editor, row, type, snapshot.rows[row]);
+      draw_parameter_controls(plugin, row, type, snapshot.rows[row]);
 
       ImGui::TableSetColumnIndex(3);
       ImGui::TextWrapped("%s", preview_for_row(snapshot, row).c_str());
@@ -341,7 +306,7 @@ void draw_editor(EditorState *editor) {
       bool enabled = std::floor(snapshot.rows[row].enabled) >= 1.0;
       if (ImGui::Checkbox(("##enabled" + std::to_string(row)).c_str(),
                           &enabled))
-        apply_ui_param_change(editor->plugin,
+        apply_ui_param_change(plugin,
                               row_param_id(static_cast<std::uint32_t>(row),
                                            RowParamSlot::Enabled),
                               enabled ? 1.0 : 0.0);
@@ -358,7 +323,7 @@ void draw_editor(EditorState *editor) {
             continue;
           const bool selected = candidate == typeIndex;
           if (ImGui::Selectable(command_type_name(candidateType), selected)) {
-            apply_ui_param_change(editor->plugin,
+            apply_ui_param_change(plugin,
                                   row_param_id(static_cast<std::uint32_t>(row),
                                                RowParamSlot::Type),
                                   static_cast<double>(candidate));
@@ -370,7 +335,7 @@ void draw_editor(EditorState *editor) {
       }
 
       ImGui::TableSetColumnIndex(3);
-      draw_parameter_controls(editor, row, type, snapshot.rows[row]);
+      draw_parameter_controls(plugin, row, type, snapshot.rows[row]);
 
       ImGui::TableSetColumnIndex(4);
       ImGui::TextWrapped("%s", preview_for_row(snapshot, row).c_str());
@@ -380,278 +345,98 @@ void draw_editor(EditorState *editor) {
   }
 
   ImGui::End();
-
-  ImGui::Render();
-#ifdef __APPLE__
-  ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(),
-                                 metalContext->commandBuffer,
-                                 metalContext->renderEncoder);
-#else
-  glViewport(0, 0, static_cast<int>(editor->width),
-             static_cast<int>(editor->height));
-  glClearColor(0.10f, 0.11f, 0.12f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-#endif
-}
-
-PuglStatus on_pugl_event(PuglView *view, const PuglEvent *event) {
-  auto *editor = static_cast<EditorState *>(puglGetHandle(view));
-  if (!editor)
-    return PUGL_SUCCESS;
-
-  ImGui::SetCurrentContext(editor->imgui);
-
-  switch (event->type) {
-  case PUGL_REALIZE:
-    if (!editor->renderInited) {
-#ifdef __APPLE__
-      auto *metalContext =
-          static_cast<PuglMetalContext *>(puglGetContext(editor->view));
-      if (!metalContext || !metalContext->device)
-        break;
-      ImGui_ImplMetal_Init(metalContext->device);
-#else
-      ImGui_ImplOpenGL3_Init("#version 150");
-#endif
-      editor->renderInited = true;
-    }
-    break;
-  case PUGL_UNREALIZE:
-    if (editor->renderInited) {
-#ifdef __APPLE__
-      ImGui_ImplMetal_Shutdown();
-#else
-      ImGui_ImplOpenGL3_Shutdown();
-#endif
-      editor->renderInited = false;
-    }
-    break;
-  case PUGL_CONFIGURE:
-    editor->width = event->configure.width;
-    editor->height = event->configure.height;
-    break;
-  case PUGL_UPDATE:
-    puglObscureView(view);
-    break;
-  case PUGL_EXPOSE:
-    if (editor->renderInited)
-      draw_editor(editor);
-    break;
-  case PUGL_TIMER:
-    if (event->timer.id == kRenderTimerId)
-      editor_tick(editor);
-    break;
-  case PUGL_CLOSE:
-    editor->wasClosed = true;
-    editor_stop_internal_timer(editor);
-    if (!editor->destroying && editor->host) {
-      const auto *hostGui = static_cast<const clap_host_gui_t *>(
-          editor->host->get_extension(editor->host, CLAP_EXT_GUI));
-      if (hostGui && hostGui->closed)
-        hostGui->closed(editor->host, false);
-    }
-    break;
-  case PUGL_BUTTON_PRESS:
-    puglGrabFocus(view);
-    ImGui_ImplPugl_ProcessEvent(event);
-    break;
-  case PUGL_KEY_PRESS:
-    if (editor->embedded && is_plain_space_key(event) &&
-        !ImGui::GetIO().WantTextInput)
-      return PUGL_UNSUPPORTED;
-    ImGui_ImplPugl_ProcessEvent(event);
-    break;
-  default:
-    ImGui_ImplPugl_ProcessEvent(event);
-    break;
-  }
-
-  return PUGL_SUCCESS;
 }
 
 } // namespace
 
+struct EditorState {
+  Plugin *plugin = nullptr;
+  EditorShell *shell = nullptr;
+};
+
 EditorState *editor_create(Plugin *plugin) {
   auto *editor = new EditorState();
   editor->plugin = plugin;
-  editor->host = plugin ? plugin->host : nullptr;
-  editor->world = puglNewWorld(PUGL_MODULE, 0);
-  if (!editor->world) {
+
+  EditorShellConfig config = {};
+  config.title = "ccomidi";
+  config.className = "ccomidi";
+
+
+
+
+  EditorShellCallbacks callbacks = {};
+  callbacks.userData = plugin;
+  callbacks.drawFrame = &draw_frame;
+
+  editor->shell = editor_shell_create(plugin ? plugin->host : nullptr, config,
+                                      callbacks);
+  if (!editor->shell) {
     delete editor;
     return nullptr;
   }
-
-  puglSetWorldString(editor->world, PUGL_CLASS_NAME, "ccomidi");
-  editor->view = puglNewView(editor->world);
-  if (!editor->view) {
-    puglFreeWorld(editor->world);
-    delete editor;
-    return nullptr;
-  }
-
-#ifdef __APPLE__
-  puglSetBackend(editor->view, puglMetalBackend());
-#else
-  puglSetBackend(editor->view, puglGlBackend());
-  puglSetViewHint(editor->view, PUGL_CONTEXT_API, PUGL_OPENGL_API);
-  puglSetViewHint(editor->view, PUGL_CONTEXT_VERSION_MAJOR, 3);
-  puglSetViewHint(editor->view, PUGL_CONTEXT_VERSION_MINOR, 3);
-  puglSetViewHint(editor->view, PUGL_CONTEXT_PROFILE, PUGL_OPENGL_CORE_PROFILE);
-  puglSetViewHint(editor->view, PUGL_DOUBLE_BUFFER, 1);
-#endif
-  puglSetViewHint(editor->view, PUGL_RESIZABLE, 1);
-  puglSetSizeHint(editor->view, PUGL_DEFAULT_SIZE, kDefaultWidth,
-                  kDefaultHeight);
-  puglSetSizeHint(editor->view, PUGL_MIN_SIZE, 720, 420);
-  puglSetViewString(editor->view, PUGL_WINDOW_TITLE, "ccomidi");
-  puglSetHandle(editor->view, editor);
-  puglSetEventFunc(editor->view, on_pugl_event);
-
-  editor->imgui = ImGui::CreateContext();
-  ImGui::SetCurrentContext(editor->imgui);
-  ImGuiIO &io = ImGui::GetIO();
-  io.IniFilename = nullptr;
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  ImGui::StyleColorsDark();
-  ImGui::GetStyle().ScaleAllSizes(kDefaultUiScale);
-  io.FontGlobalScale = kDefaultUiScale;
-  ImGui_ImplPugl_Init(editor->view);
-
   return editor;
 }
 
 void editor_prepare_destroy(EditorState *editor) {
   if (!editor)
     return;
-
-  editor->destroying = true;
   editor->plugin = nullptr;
-  editor_stop_internal_timer(editor);
+  editor_shell_prepare_destroy(editor->shell);
 }
 
 void editor_destroy(EditorState *editor) {
   if (!editor)
     return;
-
-  editor_prepare_destroy(editor);
-  ImGui::SetCurrentContext(editor->imgui);
-  if (editor->view && editor->renderInited) {
-    puglEnterContext(editor->view);
-#ifdef __APPLE__
-    ImGui_ImplMetal_Shutdown();
-#else
-    ImGui_ImplOpenGL3_Shutdown();
-#endif
-    editor->renderInited = false;
-    puglLeaveContext(editor->view);
-  }
-  ImGui_ImplPugl_Shutdown();
-  if (editor->view)
-    puglFreeView(editor->view);
-  if (editor->imgui)
-    ImGui::DestroyContext(editor->imgui);
-  if (editor->world)
-    puglFreeWorld(editor->world);
+  editor_shell_destroy(editor->shell);
   delete editor;
 }
 
-bool editor_set_parent(EditorState *editor, std::uintptr_t nativeParent) {
-  if (!editor || !editor->view || editor->realized)
-    return false;
-
-  puglSetParent(editor->view, reinterpret_cast<PuglNativeView>(nativeParent));
-  const PuglStatus status = puglRealize(editor->view);
-  if (status != PUGL_SUCCESS)
-    return false;
-  editor->embedded = true;
-  editor->realized = true;
-  return true;
-}
-
 bool editor_show(EditorState *editor) {
-  if (!editor || !editor->view)
-    return false;
-
-  if (!editor->realized) {
-    const PuglStatus status = puglRealize(editor->view);
-    if (status != PUGL_SUCCESS)
-      return false;
-    editor->realized = true;
-  }
-
-  puglShow(editor->view,
-           editor->embedded ? PUGL_SHOW_PASSIVE : PUGL_SHOW_RAISE);
-  return true;
+  return editor && editor_shell_show(editor->shell);
 }
 
 bool editor_hide(EditorState *editor) {
-  if (!editor || !editor->view)
-    return false;
-  editor_stop_internal_timer(editor);
-  puglHide(editor->view);
-  return true;
+  return editor && editor_shell_hide(editor->shell);
+}
+
+bool editor_set_parent(EditorState *editor, std::uintptr_t nativeParent) {
+  return editor && editor_shell_set_parent(editor->shell, nativeParent);
 }
 
 bool editor_set_size(EditorState *editor, std::uint32_t width,
                      std::uint32_t height) {
-  if (!editor || !editor->view)
-    return false;
-
-  double scale = puglGetScaleFactor(editor->view);
-  if (scale < 1.0)
-    scale = 1.0;
-  puglSetSizeHint(editor->view, PUGL_CURRENT_SIZE,
-                  static_cast<PuglSpan>(width * scale),
-                  static_cast<PuglSpan>(height * scale));
-  return true;
+  return editor && editor_shell_set_size(editor->shell, width, height);
 }
 
 void editor_get_size(EditorState *editor, std::uint32_t *width,
                      std::uint32_t *height) {
-  if (!width || !height)
-    return;
   if (!editor) {
-    *width = kDefaultWidth;
-    *height = kDefaultHeight;
+    if (width)
+      *width = kDefaultWidth;
+    if (height)
+      *height = kDefaultHeight;
     return;
   }
-
-  double scale = editor->view ? puglGetScaleFactor(editor->view) : 1.0;
-  if (scale < 1.0)
-    scale = 1.0;
-  *width = static_cast<std::uint32_t>(editor->width / scale);
-  *height = static_cast<std::uint32_t>(editor->height / scale);
+  editor_shell_get_size(editor->shell, width, height);
 }
 
 bool editor_can_resize(EditorState *editor) {
-  return editor && editor->embedded;
+  return editor && editor_shell_can_resize(editor->shell);
 }
 
 bool editor_was_closed(EditorState *editor) {
-  return editor && editor->wasClosed;
-}
-
-void editor_tick(EditorState *editor) {
-  if (!editor || editor->destroying || !editor->world)
-    return;
-
-  if (editor->view && editor->realized)
-    puglObscureView(editor->view);
-
-  puglUpdate(editor->world, 0.0);
+  return editor && editor_shell_was_closed(editor->shell);
 }
 
 void editor_start_internal_timer(EditorState *editor) {
-  if (!editor || !editor->view || !editor->realized)
-    return;
-  puglStartTimer(editor->view, kRenderTimerId, 1.0 / 60.0);
+  if (editor)
+    editor_shell_start_timer(editor->shell);
 }
 
 void editor_stop_internal_timer(EditorState *editor) {
-  if (!editor || !editor->view || !editor->realized)
-    return;
-  puglStopTimer(editor->view, kRenderTimerId);
+  if (editor)
+    editor_shell_stop_timer(editor->shell);
 }
 
 } // namespace ccomidi

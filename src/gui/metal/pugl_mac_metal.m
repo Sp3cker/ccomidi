@@ -6,6 +6,7 @@
 #include "mac.h"
 #include "stub.h"
 
+#import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
@@ -254,4 +255,40 @@ PuglStatus puglEnterContext(PuglView *view) {
 
 PuglStatus puglLeaveContext(PuglView *view) {
   return view->backend->leave(view, NULL);
+}
+
+// Synchronous clipboard access for macOS. Pugl's puglPaste is async which
+// confuses Dear ImGui's InputText — it expects GetClipboardTextFn to return
+// the current clipboard immediately.
+const char *ccomidi_mac_clipboard_get_text(void) {
+  static char buffer[8192];
+  buffer[0] = '\0';
+  @autoreleasepool {
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    NSString *str = [pb stringForType:NSPasteboardTypeString];
+    if (!str) {
+      return buffer;
+    }
+    const char *utf8 = [str UTF8String];
+    if (!utf8) {
+      return buffer;
+    }
+    strncpy(buffer, utf8, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+  }
+  return buffer;
+}
+
+void ccomidi_mac_clipboard_set_text(const char *text) {
+  if (!text) {
+    return;
+  }
+  @autoreleasepool {
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    NSString *str = [NSString stringWithUTF8String:text];
+    if (str) {
+      [pb setString:str forType:NSPasteboardTypeString];
+    }
+  }
 }

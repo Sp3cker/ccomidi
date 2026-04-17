@@ -1,8 +1,7 @@
-- Code shall be for a CLAP plugin that sends MIDI CC commands on host playback.
-- Plugin sends midi cc commands once upon host playback.
-- Commands are automatable via CLAP parameters.
-- The `plugin` folder contains the CLAP plugin that will be the receiver of the CC commands. - The `m4a_engine.c` file and its `m4a_engine_cc` function. It switches on the CC commands we'll be sending. The plugin must be able to send these.
-- This plugin will use the same rendering pipeline as `../poryaaaa`, using Pugl as a backend for ImGUI, using a PuglTimer to re-render the GUI every 60 seconds. Any improvement of this code's architecture would be appreciated.
-- The code for the GUI backend is available in this repo.
-- You shall write tests and run them every iteration you make.
-- The human you're writing this code for doesn't understand C/C++.
+- Refer to Agents.md for your approach. Your work is influenced strongly by Agents.md.
+- Build a CLAP plugin for buffering MIDI notes, including Pitch Bend commands and CC events, preserving target MIDI channels, into an in-memory buffer. Upon user command, the buffer will be written to a specified file as a MIDI type 1 file.
+- The plugin will use Pugl with a Metal backend available in this repo `src/gui/metal`.
+- The plugin will use Imgui with Pugl, implentation available at `src/gui/imgui_impl_pugl.cpp`
+- The plugin will be a seperate target of the plugin in this repo. Share as much code as possible.
+- If the in-memory buffer exceeds over 500 lines of code to implement, a 3rd party library MUST be used. All work will stop at this stage of implentation to choose a library to use.
+- Use the already working plugin's GUI rendering timer code to implement this plugin's timer.

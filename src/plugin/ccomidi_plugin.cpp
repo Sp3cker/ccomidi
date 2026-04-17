@@ -24,7 +24,7 @@
 
 namespace ccomidi {
 
-constexpr std::uint32_t kStateVersion = 3;
+constexpr std::uint32_t kStateVersion = 5;
 
 Plugin *from_plugin(const clap_plugin_t *plugin) {
   return plugin ? static_cast<Plugin *>(plugin->plugin_data) : nullptr;
@@ -133,6 +133,8 @@ void fill_ui_snapshot(Plugin *plugin, UiSnapshot *snapshot) {
 
   std::lock_guard<std::mutex> lock(plugin->stateMutex);
   snapshot->outputChannel = plugin->core.output_channel_value();
+  snapshot->program = plugin->core.program_value();
+  snapshot->programEnabled = plugin->core.program_enabled_value();
   for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
     snapshot->rows[row].enabled = plugin->core.row_enabled_value(row);
     snapshot->rows[row].type = plugin->core.row_type_value(row);
@@ -162,6 +164,12 @@ void set_param_value(Plugin *plugin, clap_id paramId, double value) {
   switch (address.kind) {
   case ParamKind::OutputChannel:
     plugin->core.set_output_channel(value);
+    break;
+  case ParamKind::Program:
+    plugin->core.set_program(value);
+    break;
+  case ParamKind::ProgramEnabled:
+    plugin->core.set_program_enabled(value);
     break;
   case ParamKind::RowEnabled:
     plugin->core.set_row_enabled(address.row, value);
@@ -196,10 +204,14 @@ void apply_ui_param_change(Plugin *plugin, clap_id paramId, double value) {
     std::lock_guard<std::mutex> lock(plugin->stateMutex);
     std::array<bool, kMaxCommandRows> rowChanged = {};
     bool channelChanged = false;
+    bool programChanged = false;
     plugin->core.apply_parameter_change(AutomationEvent{0, address, value},
-                                        &channelChanged, &rowChanged);
+                                        &channelChanged, &rowChanged,
+                                        &programChanged);
     plugin->pendingUiChannelChange =
         plugin->pendingUiChannelChange || channelChanged;
+    plugin->pendingUiProgramChange =
+        plugin->pendingUiProgramChange || programChanged;
     for (std::size_t row = 0; row < kMaxCommandRows; ++row)
       plugin->pendingUiRowChanged[row] =
           plugin->pendingUiRowChanged[row] || rowChanged[row];
@@ -226,6 +238,10 @@ double get_param_value(const Plugin *plugin, clap_id paramId, bool *ok) {
   switch (address.kind) {
   case ParamKind::OutputChannel:
     return plugin->core.output_channel_value();
+  case ParamKind::Program:
+    return plugin->core.program_value();
+  case ParamKind::ProgramEnabled:
+    return plugin->core.program_enabled_value();
   case ParamKind::RowEnabled:
     return plugin->core.row_enabled_value(address.row);
   case ParamKind::RowType:
@@ -250,6 +266,14 @@ clap_param_info_flags param_flags_for_id(clap_id id) {
     return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS |
            CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
 
+  if (id == kParamProgram)
+    return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS |
+           CLAP_PARAM_IS_STEPPED;
+
+  if (id == kParamProgramEnabled)
+    return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS |
+           CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
+
   ParamAddress address = {};
   if (!decode_param_id(id, &address))
     return 0;
@@ -264,6 +288,8 @@ clap_param_info_flags param_flags_for_id(clap_id id) {
     return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS |
            CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
   case ParamKind::OutputChannel:
+  case ParamKind::Program:
+  case ParamKind::ProgramEnabled:
     return 0;
   default:
     return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS;
@@ -285,6 +311,24 @@ void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
     info->min_value = 0.0;
     info->max_value = 15.0;
     info->default_value = 0.0;
+    return;
+  }
+
+  if (id == kParamProgram) {
+    std::snprintf(info->name, sizeof(info->name), "Program");
+    std::snprintf(info->module, sizeof(info->module), "Global");
+    info->min_value = 0.0;
+    info->max_value = 127.0;
+    info->default_value = 0.0;
+    return;
+  }
+
+  if (id == kParamProgramEnabled) {
+    std::snprintf(info->name, sizeof(info->name), "Emit Program Change");
+    std::snprintf(info->module, sizeof(info->module), "Global");
+    info->min_value = 0.0;
+    info->max_value = 1.0;
+    info->default_value = 1.0;
     return;
   }
 
@@ -355,6 +399,8 @@ void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
     break;
   }
   case ParamKind::OutputChannel:
+  case ParamKind::Program:
+  case ParamKind::ProgramEnabled:
     break;
   }
 }
@@ -544,21 +590,23 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
       ((process->transport->flags & CLAP_TRANSPORT_IS_PLAYING) != 0);
   bool wasPlaying = false;
   bool pendingUiChannelChange = false;
+  bool pendingUiProgramChange = false;
   std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
   PlannedEvents pendingUiEvents = {};
   {
     std::lock_guard<std::mutex> lock(self->stateMutex);
     wasPlaying = self->core.runtime_was_playing();
     pendingUiChannelChange = self->pendingUiChannelChange;
+    pendingUiProgramChange = self->pendingUiProgramChange;
     pendingUiRowChanged = self->pendingUiRowChanged;
     self->pendingUiChannelChange = false;
+    self->pendingUiProgramChange = false;
     self->pendingUiRowChanged.fill(false);
-    if (initialPlaying && wasPlaying && pendingUiChannelChange) {
-      self->core.emit_preapplied_changes(true, true, pendingUiRowChanged, 0,
-                                         &pendingUiEvents);
-    } else if (initialPlaying && wasPlaying) {
-      self->core.emit_preapplied_changes(true, false, pendingUiRowChanged, 0,
-                                         &pendingUiEvents);
+    if (initialPlaying && wasPlaying) {
+      self->core.emit_preapplied_changes(true, pendingUiChannelChange,
+                                         pendingUiRowChanged, 0,
+                                         &pendingUiEvents,
+                                         pendingUiProgramChange);
     }
   }
 
@@ -974,6 +1022,18 @@ bool params_value_to_text(const clap_plugin_t *plugin, clap_id paramId,
     return true;
   }
 
+  if (paramId == kParamProgram) {
+    int program = static_cast<int>(std::floor(value));
+    program = std::clamp(program, 0, 127);
+    std::snprintf(display, size, "%d", program);
+    return true;
+  }
+
+  if (paramId == kParamProgramEnabled) {
+    std::snprintf(display, size, "%s", std::floor(value) >= 1.0 ? "On" : "Off");
+    return true;
+  }
+
   ParamAddress address = {};
   if (!decode_param_id(paramId, &address))
     return false;
@@ -1007,6 +1067,32 @@ bool params_text_to_value(const clap_plugin_t *plugin, clap_id paramId,
     if (end == display)
       return false;
     *value = std::clamp(parsed - 1.0, 0.0, 15.0);
+    return true;
+  }
+
+  if (paramId == kParamProgram) {
+    char *end = nullptr;
+    const double parsed = std::strtod(display, &end);
+    if (end == display)
+      return false;
+    *value = std::clamp(parsed, 0.0, 127.0);
+    return true;
+  }
+
+  if (paramId == kParamProgramEnabled) {
+    if (std::strcmp(display, "On") == 0) {
+      *value = 1.0;
+      return true;
+    }
+    if (std::strcmp(display, "Off") == 0) {
+      *value = 0.0;
+      return true;
+    }
+    char *end = nullptr;
+    const double parsed = std::strtod(display, &end);
+    if (end == display)
+      return false;
+    *value = parsed >= 1.0 ? 1.0 : 0.0;
     return true;
   }
 
@@ -1132,6 +1218,15 @@ bool state_save(const clap_plugin_t *plugin, const clap_ostream_t *stream) {
       sizeof(outputChannel))
     return false;
 
+  const double program = self->core.program_value();
+  if (stream->write(stream, &program, sizeof(program)) != sizeof(program))
+    return false;
+
+  const double programEnabled = self->core.program_enabled_value();
+  if (stream->write(stream, &programEnabled, sizeof(programEnabled)) !=
+      sizeof(programEnabled))
+    return false;
+
   for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
     const double values[] = {
         self->core.row_enabled_value(row), self->core.row_type_value(row),
@@ -1152,7 +1247,7 @@ bool state_load(const clap_plugin_t *plugin, const clap_istream_t *stream) {
   std::uint32_t version = 0;
   if (stream->read(stream, &version, sizeof(version)) != sizeof(version))
     return false;
-  if (version != 2 && version != kStateVersion)
+  if (version != 2 && version != 3 && version != 4 && version != kStateVersion)
     return false;
 
   double outputChannel = 0.0;
@@ -1160,11 +1255,26 @@ bool state_load(const clap_plugin_t *plugin, const clap_istream_t *stream) {
       sizeof(outputChannel))
     return false;
 
+  double program = 0.0;
+  if (version == 4 || version == kStateVersion) {
+    if (stream->read(stream, &program, sizeof(program)) != sizeof(program))
+      return false;
+  }
+
+  double programEnabled = 1.0;
+  if (version == kStateVersion) {
+    if (stream->read(stream, &programEnabled, sizeof(programEnabled)) !=
+        sizeof(programEnabled))
+      return false;
+  }
+
   std::lock_guard<std::mutex> lock(self->stateMutex);
   self->core.reset();
   self->core.set_output_channel(outputChannel);
+  self->core.set_program(program);
+  self->core.set_program_enabled(programEnabled);
 
-  if (version == kStateVersion) {
+  if (version == kStateVersion || version == 4 || version == 3) {
     for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
       double values[6] = {};
       if (!read_row_state(stream, values))

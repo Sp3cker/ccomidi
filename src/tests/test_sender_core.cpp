@@ -66,12 +66,15 @@ void test_start_of_playback_emits_snapshot() {
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-  ASSERT_EQ(planned.count, 1, "playback start emits one direct CC");
-  ASSERT_EQ(planned.events[0].time, 0, "playback snapshot is at time zero");
-  ASSERT_EQ(planned.events[0].status, 0xB2,
+  ASSERT_EQ(planned.count, 2,
+            "playback start emits program change plus direct CC");
+  ASSERT_EQ(planned.events[0].status, 0xC2,
+            "snapshot leads with program change on configured channel");
+  ASSERT_EQ(planned.events[1].time, 0, "playback snapshot is at time zero");
+  ASSERT_EQ(planned.events[1].status, 0xB2,
             "configured channel overrides outgoing MIDI channel");
-  ASSERT_EQ(planned.events[0].data1, 0x07, "volume row emits CC 7");
-  ASSERT_EQ(planned.events[0].data2, 100, "volume row emits configured value");
+  ASSERT_EQ(planned.events[1].data1, 0x07, "volume row emits CC 7");
+  ASSERT_EQ(planned.events[1].data2, 100, "volume row emits configured value");
 }
 
 void test_fixed_rows_emit_expected_controllers() {
@@ -86,10 +89,13 @@ void test_fixed_rows_emit_expected_controllers() {
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-  ASSERT_EQ(planned.count, 3, "fixed command rows emit without type selection");
-  ASSERT_EQ(planned.events[0].data1, 0x0A, "pan row always emits CC 10");
-  ASSERT_EQ(planned.events[1].data1, 0x01, "mod row always emits CC 1");
-  ASSERT_EQ(planned.events[2].data1, 0x15, "lfo speed row always emits CC 21");
+  ASSERT_EQ(planned.count, 4,
+            "snapshot emits program change then three fixed rows");
+  ASSERT_EQ(planned.events[0].status & 0xF0, 0xC0,
+            "snapshot leads with program change");
+  ASSERT_EQ(planned.events[1].data1, 0x0A, "pan row always emits CC 10");
+  ASSERT_EQ(planned.events[2].data1, 0x01, "mod row always emits CC 1");
+  ASSERT_EQ(planned.events[3].data1, 0x15, "lfo speed row always emits CC 21");
 }
 
 void test_floor_quantization_deduplicates_automation() {
@@ -134,11 +140,14 @@ void test_channel_change_resends_snapshot() {
       make_event(12, ParamKind::OutputChannel, kVolumeRow, 5.9);
   core.process_block(TransportState{true}, &event, 1, &planned);
 
-  ASSERT_EQ(planned.count, 1, "channel change resends snapshot");
-  ASSERT_EQ(planned.events[0].time, 12, "channel resend preserves event time");
-  ASSERT_EQ(planned.events[0].status, 0xB5,
+  ASSERT_EQ(planned.count, 2,
+            "channel change resends program change and snapshot");
+  ASSERT_EQ(planned.events[0].status, 0xC5,
+            "resend leads with program change on new channel");
+  ASSERT_EQ(planned.events[1].time, 12, "channel resend preserves event time");
+  ASSERT_EQ(planned.events[1].status, 0xB5,
             "resend uses the new floored output channel");
-  ASSERT_EQ(planned.events[0].data2, 64,
+  ASSERT_EQ(planned.events[1].data2, 64,
             "resend carries the selected channel bank value");
 }
 
@@ -152,13 +161,16 @@ void test_compound_xcmd_row_reemits_full_sequence() {
   core.set_row_value(kFirstConfigurableRow, 0, 22.0);
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
-  ASSERT_EQ(planned.count, 2, "xcmd snapshot emits selector and data");
-  ASSERT_EQ(planned.events[0].data1, 0x1E,
+  ASSERT_EQ(planned.count, 3,
+            "xcmd snapshot emits program change, selector, and data");
+  ASSERT_EQ(planned.events[0].status & 0xF0, 0xC0,
+            "xcmd snapshot leads with program change");
+  ASSERT_EQ(planned.events[1].data1, 0x1E,
             "xcmd selector controller emitted first");
-  ASSERT_EQ(planned.events[0].data2, 0x08, "xcmd IECV selector value emitted");
-  ASSERT_EQ(planned.events[1].data1, 0x1D,
+  ASSERT_EQ(planned.events[1].data2, 0x08, "xcmd IECV selector value emitted");
+  ASSERT_EQ(planned.events[2].data1, 0x1D,
             "xcmd data controller emitted second");
-  ASSERT_EQ(planned.events[1].data2, 22, "xcmd data value emitted");
+  ASSERT_EQ(planned.events[2].data2, 22, "xcmd data value emitted");
 
   AutomationEvent event =
       make_event(8, ParamKind::RowValue0, kFirstConfigurableRow, 23.9);
@@ -184,9 +196,11 @@ void test_stopped_automation_is_applied_on_next_start() {
   ASSERT_EQ(planned.count, 0, "automation while stopped does not emit");
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
-  ASSERT_EQ(planned.count, 1,
-            "next playback start emits cached automated value");
-  ASSERT_EQ(planned.events[0].data2, 43,
+  ASSERT_EQ(planned.count, 2,
+            "next playback start emits program change and cached value");
+  ASSERT_EQ(planned.events[0].status & 0xF0, 0xC0,
+            "snapshot leads with program change");
+  ASSERT_EQ(planned.events[1].data2, 43,
             "playback start uses current automated state");
 }
 
@@ -203,11 +217,14 @@ void test_memacc_reemits_full_canonical_sequence() {
   core.set_row_value(kFirstConfigurableRow, 3, 64.0);
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
-  ASSERT_EQ(planned.count, 4, "memacc emits full setup sequence");
-  ASSERT_EQ(planned.events[0].data1, 0x0D, "memacc op byte emitted");
-  ASSERT_EQ(planned.events[1].data1, 0x0E, "memacc param1 byte emitted");
-  ASSERT_EQ(planned.events[2].data1, 0x0F, "memacc param2 byte emitted");
-  ASSERT_EQ(planned.events[3].data1, 0x0C, "memacc trigger byte emitted");
+  ASSERT_EQ(planned.count, 5,
+            "memacc snapshot emits program change and full setup sequence");
+  ASSERT_EQ(planned.events[0].status & 0xF0, 0xC0,
+            "memacc snapshot leads with program change");
+  ASSERT_EQ(planned.events[1].data1, 0x0D, "memacc op byte emitted");
+  ASSERT_EQ(planned.events[2].data1, 0x0E, "memacc param1 byte emitted");
+  ASSERT_EQ(planned.events[3].data1, 0x0F, "memacc param2 byte emitted");
+  ASSERT_EQ(planned.events[4].data1, 0x0C, "memacc trigger byte emitted");
 
   AutomationEvent event =
       make_event(9, ParamKind::RowValue3, kFirstConfigurableRow, 80.9);
@@ -225,8 +242,10 @@ void test_runtime_reset_preserves_parameter_values() {
   core.reset_runtime_state();
   core.process_block(TransportState{true}, nullptr, 0, &planned);
 
-  ASSERT_EQ(planned.count, 1, "runtime reset rearms playback snapshot");
-  ASSERT_EQ(planned.events[0].data2, 100,
+  ASSERT_EQ(planned.count, 2, "runtime reset rearms playback snapshot");
+  ASSERT_EQ(planned.events[0].status & 0xF0, 0xC0,
+            "snapshot leads with program change after reset");
+  ASSERT_EQ(planned.events[1].data2, 100,
             "runtime reset preserves parameter values");
 }
 
@@ -248,10 +267,13 @@ void test_preapplied_channel_change_resends_snapshot() {
       &channelChanged, &rowChanged);
   core.emit_preapplied_changes(true, channelChanged, rowChanged, 0, &planned);
 
-  ASSERT_EQ(planned.count, 1, "preapplied channel change resends snapshot");
-  ASSERT_EQ(planned.events[0].status, 0xB7,
+  ASSERT_EQ(planned.count, 2,
+            "preapplied channel change resends program change and snapshot");
+  ASSERT_EQ(planned.events[0].status, 0xC7,
+            "preapplied resend leads with program change on new channel");
+  ASSERT_EQ(planned.events[1].status, 0xB7,
             "preapplied resend uses new output channel");
-  ASSERT_EQ(planned.events[0].data2, 45,
+  ASSERT_EQ(planned.events[1].data2, 45,
             "preapplied resend carries selected channel bank value");
 }
 
@@ -284,19 +306,23 @@ void test_channel_switch_keeps_single_command_bank() {
             "changing output channel does not change stored volume value");
 
   core.process_block(TransportState{true}, nullptr, 0, &planned);
-  ASSERT_EQ(planned.count, 1, "playback snapshot emits active single bank");
-  ASSERT_EQ(planned.events[0].status, 0xB0,
+  ASSERT_EQ(planned.count, 2, "playback snapshot emits active single bank");
+  ASSERT_EQ(planned.events[0].status, 0xC0,
+            "snapshot leads with program change on channel 0");
+  ASSERT_EQ(planned.events[1].status, 0xB0,
             "snapshot uses current output channel");
-  ASSERT_EQ(planned.events[0].data2, 100,
+  ASSERT_EQ(planned.events[1].data2, 100,
             "snapshot keeps the configured single-bank value");
 
   AutomationEvent switchEvent =
       make_event(5, ParamKind::OutputChannel, kVolumeRow, 1.0);
   core.process_block(TransportState{true}, &switchEvent, 1, &planned);
-  ASSERT_EQ(planned.count, 1, "channel switch resends the same single-bank snapshot");
-  ASSERT_EQ(planned.events[0].status, 0xB1,
+  ASSERT_EQ(planned.count, 2, "channel switch resends the same single-bank snapshot");
+  ASSERT_EQ(planned.events[0].status, 0xC1,
+            "switch resend leads with program change on new channel");
+  ASSERT_EQ(planned.events[1].status, 0xB1,
             "switch resend uses the new output channel");
-  ASSERT_EQ(planned.events[0].data2, 100,
+  ASSERT_EQ(planned.events[1].data2, 100,
             "switch resend preserves the configured value");
 }
 

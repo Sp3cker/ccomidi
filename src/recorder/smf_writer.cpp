@@ -1,6 +1,7 @@
 #include "recorder/smf_writer.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <unordered_set>
 #include <vector>
 
@@ -42,20 +43,56 @@ bool write_smf1(const std::string &path,
     initBpm = snapshot.tempo[0].bpm;
 
   try {
-    smf::MidiFile midifile;
-    // MidiFile default-constructs with one track; we need exactly two.
-    midifile.addTracks(1);
-    midifile.setTicksPerQuarterNote(ppq);
-
     constexpr int kConductorTrack = 0;
-    constexpr int kMusicTrack = 1;
+
+    int channelTrack[16];
+    for (int i = 0; i < 16; ++i)
+      channelTrack[i] = -1;
+    int nextTrack = 1;
+    for (const MidiRecord &m : snapshot.midi) {
+      if (!is_channel_voice_status(m.status))
+        continue;
+      const std::uint8_t channel = m.status & 0x0F;
+      if (channelTrack[channel] < 0)
+        channelTrack[channel] = nextTrack++;
+    }
+    // Always keep at least one music track so MidiFile::write never calls
+    // back() on an empty event list (UB) when nothing was recorded.
+    const int totalTracks = nextTrack > 1 ? nextTrack : 2;
+
+    smf::MidiFile midifile;
+    // MidiFile default-constructs with one track.
+    midifile.addTracks(totalTracks - 1);
+    midifile.setTicksPerQuarterNote(ppq);
 
     midifile.addTrackName(kConductorTrack, 0, "Conductor");
     midifile.addTimeSignature(kConductorTrack, 0, 4, 4);
 
-    // Seed the music track so MidiFile::write never calls back() on an empty
-    // event list (which is UB and crashes the host when nothing was recorded).
-    midifile.addTrackName(kMusicTrack, 0, "Music");
+    if (snapshot.hasLoop) {
+      //  if the snapshot has a loop, emit addMarker("[") and addMarker("]") on the conductor track. 
+      const double loopBpm =
+          !snapshot.tempo.empty() && snapshot.tempo[0].bpm > 0.0
+              ? snapshot.tempo[0].bpm
+              : initBpm;
+      const int startTick = ticks_for_sample(snapshot.loopStartSample,
+                                             sampleRate, loopBpm, ppq);
+      const int endTick =
+          ticks_for_sample(snapshot.loopEndSample, sampleRate, loopBpm, ppq);
+      midifile.addMarker(kConductorTrack, startTick, "[");
+      midifile.addMarker(kConductorTrack, endTick, "]");
+    }
+
+    if (nextTrack == 1) {
+      midifile.addTrackName(1, 0, "Music");
+    } else {
+      for (int ch = 0; ch < 16; ++ch) {
+        if (channelTrack[ch] < 0)
+          continue;
+        char name[16];
+        std::snprintf(name, sizeof(name), "Ch %d", ch + 1);
+        midifile.addTrackName(channelTrack[ch], 0, name);
+      }
+    }
 
     const bool firstTempoAtZero =
         !snapshot.tempo.empty() && snapshot.tempo[0].sampleTime == 0;
@@ -63,7 +100,7 @@ bool write_smf1(const std::string &path,
       midifile.addTempo(kConductorTrack, 0, initBpm);
 
     double currentBpm = initBpm;
-    int lastMusicTick = 0;
+    int lastTickPerChannel[16] = {0};
     std::unordered_set<std::uint16_t> heldNotes;
     std::size_t mi = 0;
     std::size_t ti = 0;
@@ -89,6 +126,10 @@ bool write_smf1(const std::string &path,
         ++mi;
         if (!is_channel_voice_status(m.status))
           continue;
+        const std::uint8_t channel = m.status & 0x0F;
+        const int track = channelTrack[channel];
+        if (track < 0)
+          continue;
         const int tick =
             ticks_for_sample(m.sampleTime, sampleRate, currentBpm, ppq);
         std::vector<uchar> bytes;
@@ -96,12 +137,11 @@ bool write_smf1(const std::string &path,
         bytes.push_back(static_cast<uchar>(m.data1));
         if (!is_single_data_byte_status(m.status))
           bytes.push_back(static_cast<uchar>(m.data2));
-        midifile.addEvent(kMusicTrack, tick, bytes);
-        if (tick > lastMusicTick)
-          lastMusicTick = tick;
+        midifile.addEvent(track, tick, bytes);
+        if (tick > lastTickPerChannel[channel])
+          lastTickPerChannel[channel] = tick;
 
         const std::uint8_t kind = m.status & 0xF0;
-        const std::uint8_t channel = m.status & 0x0F;
         const std::uint16_t key =
             static_cast<std::uint16_t>((channel << 8) | m.data1);
         if (kind == 0x90 && m.data2 > 0)
@@ -111,20 +151,30 @@ bool write_smf1(const std::string &path,
       }
     }
 
-    if (!heldNotes.empty()) {
-      const int releaseTick = lastMusicTick + 1;
-      for (std::uint16_t key : heldNotes) {
-        const std::uint8_t channel = static_cast<std::uint8_t>((key >> 8) & 0x0F);
-        const std::uint8_t note = static_cast<std::uint8_t>(key & 0x7F);
-        std::vector<uchar> bytes;
-        bytes.push_back(static_cast<uchar>(0x80 | channel));
-        bytes.push_back(static_cast<uchar>(note));
-        bytes.push_back(0);
-        midifile.addEvent(kMusicTrack, releaseTick, bytes);
-      }
+    for (std::uint16_t key : heldNotes) {
+      const std::uint8_t channel = static_cast<std::uint8_t>((key >> 8) & 0x0F);
+      const std::uint8_t note = static_cast<std::uint8_t>(key & 0x7F);
+      const int track = channelTrack[channel];
+      if (track < 0)
+        continue;
+      const int releaseTick = lastTickPerChannel[channel] + 1;
+      std::vector<uchar> bytes;
+      bytes.push_back(static_cast<uchar>(0x80 | channel));
+      bytes.push_back(static_cast<uchar>(note));
+      bytes.push_back(0);
+      midifile.addEvent(track, releaseTick, bytes);
     }
 
-    midifile.sortTracks();
+    // Intentionally skip sortTracks() on music tracks: its same-tick comparator
+    // reorders CCs by controller number, which swaps GBA 0x1E prefix commands
+    // behind their 0x1D value. Music tracks are appended in tick-ascending
+    // order per track, so MidiFile::write can compute delta times directly.
+    //
+    // The conductor track is another matter: we append Name/TimeSig/markers
+    // at arbitrary ticks and the tempo fallback at tick 0 AFTER the markers,
+    // which would produce negative deltas (then VLQ-clamped to 2^28-1,
+    // overflowing mid2agb's int32 ConvertTimes). Sort just the conductor.
+    midifile.sortTrackNoteOnsBeforeOffs(kConductorTrack);
     return midifile.write(path);
   } catch (...) {
     return false;

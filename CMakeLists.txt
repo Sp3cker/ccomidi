@@ -153,6 +153,15 @@ target_link_libraries(ccomidi_recorder_core PRIVATE
     midifile
 )
 
+add_executable(ccomidi_recorder_tests
+    src/tests/test_recorder_smf.cpp
+)
+
+target_link_libraries(ccomidi_recorder_tests PRIVATE
+    ccomidi_recorder_core
+    midifile
+)
+
 add_library(ccomidi_recorder MODULE
     src/plugin/recorder/recorder_plugin.cpp
     src/plugin/recorder/recorder_editor.cpp

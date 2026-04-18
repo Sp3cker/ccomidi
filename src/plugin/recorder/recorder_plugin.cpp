@@ -5,6 +5,7 @@
 #include <clap/ext/note-ports.h>
 #include <clap/ext/render.h>
 #include <clap/ext/state.h>
+#include <clap/fixedpoint.h>
 #include <clap/plugin-features.h>
 
 #include <cstdio>
@@ -117,9 +118,7 @@ bool plugin_start_processing(const clap_plugin_t *plugin) {
 
 void plugin_stop_processing(const clap_plugin_t *plugin) { (void)plugin; }
 
-void plugin_reset(const clap_plugin_t *plugin) {
-  (void)plugin;
-}
+void plugin_reset(const clap_plugin_t *plugin) { (void)plugin; }
 
 clap_process_status plugin_process(const clap_plugin_t *plugin,
                                    const clap_process_t *process) {
@@ -129,12 +128,30 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
 
   bool isPlaying = true;
   if (process->transport)
-    isPlaying =
-        (process->transport->flags & CLAP_TRANSPORT_IS_PLAYING) != 0;
+    isPlaying = (process->transport->flags & CLAP_TRANSPORT_IS_PLAYING) != 0;
 
   if (isPlaying && process->transport &&
       (process->transport->flags & CLAP_TRANSPORT_HAS_TEMPO)) {
     self->core.set_tempo_in_block(0, process->transport->tempo);
+  }
+
+  if (isPlaying && process->transport &&
+      (process->transport->flags & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE)) {
+    // every playing block with HAS_SECONDS_TIMELINE, we decode
+    // loop_start_seconds / loop_end_seconds / song_pos_seconds from their
+    // fixed-point form and push to the core. When IS_LOOP_ACTIVE is off, the
+    // core clears hasLoop — so toggling loop off in the DAW just drops the
+    // markers.
+    const auto *tp = process->transport;
+    const bool loopActive = (tp->flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE) != 0;
+    const double factor = static_cast<double>(CLAP_SECTIME_FACTOR);
+    const double songSec = static_cast<double>(tp->song_pos_seconds) / factor;
+    const double loopStartSec =
+        static_cast<double>(tp->loop_start_seconds) / factor;
+    const double loopEndSec =
+        static_cast<double>(tp->loop_end_seconds) / factor;
+    self->core.update_loop_from_transport(loopActive, loopStartSec, loopEndSec,
+                                          songSec);
   }
 
   const std::uint32_t count =
@@ -150,8 +167,7 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
 
     if (isPlaying && header->space_id == CLAP_CORE_EVENT_SPACE_ID &&
         header->type == CLAP_EVENT_MIDI) {
-      const auto *midi =
-          reinterpret_cast<const clap_event_midi_t *>(header);
+      const auto *midi = reinterpret_cast<const clap_event_midi_t *>(header);
       self->core.push_event_in_block(header->time, midi->data[0], midi->data[1],
                                      midi->data[2]);
     }
@@ -406,11 +422,27 @@ bool render_has_hard_realtime_requirement(const clap_plugin_t *plugin) {
   return false;
 }
 
+// Note: renderMode is atomic and exchange returns the prior value, so the
+// transition detection is race-free even if the host were to call render_set
+// from an unexpected thread.
 bool render_set(const clap_plugin_t *plugin, clap_plugin_render_mode mode) {
   RecorderPlugin *self = recorder_from_plugin(plugin);
   if (!self)
     return false;
-  self->renderMode.store(static_cast<std::int32_t>(mode));
+  const std::int32_t prev =
+      self->renderMode.exchange(static_cast<std::int32_t>(mode));
+  const bool wasOffline = prev == CLAP_RENDER_OFFLINE;
+  const bool nowOffline = mode == CLAP_RENDER_OFFLINE;
+  if (!wasOffline && nowOffline) {
+    self->core.reset();
+  } else if (wasOffline && !nowOffline) {
+    {
+      std::lock_guard<std::mutex> lock(self->saveMutex);
+      self->pendingSave = true;
+    }
+    if (self->host && self->host->request_callback)
+      self->host->request_callback(self->host);
+  }
   return true;
 }
 
@@ -442,9 +474,8 @@ bool state_save(const clap_plugin_t *plugin, const clap_ostream_t *stream) {
       static_cast<std::int64_t>(sizeof(pathLen)))
     return false;
 
-  if (pathLen > 0 &&
-      stream->write(stream, path.data(), pathLen) !=
-          static_cast<std::int64_t>(pathLen))
+  if (pathLen > 0 && stream->write(stream, path.data(), pathLen) !=
+                         static_cast<std::int64_t>(pathLen))
     return false;
 
   return true;
@@ -523,7 +554,7 @@ void plugin_on_main_thread(const clap_plugin_t *plugin) {
   if (doSave && !path.empty()) {
     RecorderCore::Snapshot snap = self->core.snapshot();
     SmfWriteOptions options;
-    options.ppq = 480;
+    options.ppq = 96;
     options.fallbackBpm = 120.0;
     const bool ok = write_smf1(path, snap, options);
     std::lock_guard<std::mutex> lock(self->saveMutex);

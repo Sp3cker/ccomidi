@@ -8,6 +8,9 @@ void RecorderCore::reset() {
   tempo_.clear();
   samplePosition_ = 0;
   lastTempoBpm_ = 0.0;
+  hasLoop_ = false;
+  loopStartSample_ = 0;
+  loopEndSample_ = 0;
 }
 
 void RecorderCore::set_sample_rate(double sampleRate) {
@@ -44,6 +47,31 @@ void RecorderCore::set_tempo_in_block(std::uint32_t sampleInBlock, double bpm) {
   record.bpm = bpm;
   tempo_.push_back(record);
   lastTempoBpm_ = bpm;
+}
+
+void RecorderCore::update_loop_from_transport(bool active,
+                                              double loopStartSeconds,
+                                              double loopEndSeconds,
+                                              double songPosSeconds) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active || sampleRate_ <= 0.0) {
+    hasLoop_ = false;
+    return;
+  }
+  const double deltaStart = loopStartSeconds - songPosSeconds;
+  const double deltaEnd = loopEndSeconds - songPosSeconds;
+  const std::int64_t basePos = static_cast<std::int64_t>(samplePosition_);
+  const std::int64_t startSample =
+      basePos + static_cast<std::int64_t>(deltaStart * sampleRate_);
+  const std::int64_t endSample =
+      basePos + static_cast<std::int64_t>(deltaEnd * sampleRate_);
+  if (startSample < 0 || endSample <= startSample) {
+    hasLoop_ = false;
+    return;
+  }
+  loopStartSample_ = static_cast<std::uint64_t>(startSample);
+  loopEndSample_ = static_cast<std::uint64_t>(endSample);
+  hasLoop_ = true;
 }
 
 void RecorderCore::advance_block(std::uint32_t frames) {
@@ -85,6 +113,9 @@ RecorderCore::Snapshot RecorderCore::snapshot() const {
   snap.tempo = tempo_;
   snap.sampleRate = sampleRate_;
   snap.samplePosition = samplePosition_;
+  snap.hasLoop = hasLoop_;
+  snap.loopStartSample = loopStartSample_;
+  snap.loopEndSample = loopEndSample_;
   return snap;
 }
 

@@ -387,6 +387,85 @@ void test_same_tick_note_pair_keeps_order() {
   ASSERT_TRUE(onIdx < offIdx, "arrival order preserved: on before off");
 }
 
+// Consecutive CCs with the same (channel, controller, value) must collapse to
+// a single emitted event. DAWs often resend unchanged CCs every tick; dropping
+// the redundant copies shrinks the MIDI file without changing playback.
+void test_cc_dedup_collapses_consecutive_repeats() {
+  RecorderCore::Snapshot snap = empty_snapshot();
+  // Five CC 0x07 (volume) messages with the same value on channel 0.
+  for (std::uint64_t t = 0; t < 5; ++t)
+    snap.midi.push_back(make_midi(t * 1000u, 0xB0, 0x07, 100));
+  // A note so the channel track is populated.
+  snap.midi.push_back(make_midi(48000, 0x90, 60, 100));
+  snap.midi.push_back(make_midi(96000, 0x80, 60, 0));
+  snap.samplePosition = 96000;
+
+  const std::string path = temp_path("cc_dedup_repeats");
+  ASSERT_TRUE(write_smf1(path, snap, default_options()), "write succeeded");
+
+  smf::MidiFile mf;
+  ASSERT_TRUE(mf.read(path), "read back");
+  const int ch1 = find_track_by_name(mf, "Ch 1");
+  ASSERT_TRUE(ch1 >= 0, "ch1 exists");
+  ASSERT_EQ(count_events_on_track(mf, ch1, 0xB0), 1,
+            "five identical CCs collapse to one");
+}
+
+// Value changes must still emit. A sweep of distinct values survives intact.
+void test_cc_dedup_preserves_value_changes() {
+  RecorderCore::Snapshot snap = empty_snapshot();
+  for (std::uint8_t v = 0; v < 8; ++v)
+    snap.midi.push_back(make_midi(v * 1000u, 0xB0, 0x07, v * 10));
+  snap.midi.push_back(make_midi(48000, 0x90, 60, 100));
+  snap.midi.push_back(make_midi(96000, 0x80, 60, 0));
+  snap.samplePosition = 96000;
+
+  const std::string path = temp_path("cc_dedup_sweep");
+  ASSERT_TRUE(write_smf1(path, snap, default_options()), "write succeeded");
+
+  smf::MidiFile mf;
+  ASSERT_TRUE(mf.read(path), "read back");
+  const int ch1 = find_track_by_name(mf, "Ch 1");
+  ASSERT_TRUE(ch1 >= 0, "ch1 exists");
+  ASSERT_EQ(count_events_on_track(mf, ch1, 0xB0), 8,
+            "eight distinct-value CCs all survive");
+}
+
+// Controllers 0x1D and 0x1E are GBA prefix/value pair commands: repeating the
+// exact same (prefix, value) pair encodes a second distinct command, not a
+// duplicate. Dedup must leave them alone.
+void test_cc_dedup_exempts_gba_prefix_pair() {
+  RecorderCore::Snapshot snap = empty_snapshot();
+  // Two identical (0x1E, 0x1D) command pairs back-to-back.
+  snap.midi.push_back(make_midi(0, 0xB0, 0x1E, 0x08));
+  snap.midi.push_back(make_midi(0, 0xB0, 0x1D, 0x50));
+  snap.midi.push_back(make_midi(1000, 0xB0, 0x1E, 0x08));
+  snap.midi.push_back(make_midi(1000, 0xB0, 0x1D, 0x50));
+  snap.midi.push_back(make_midi(48000, 0x90, 60, 100));
+  snap.midi.push_back(make_midi(96000, 0x80, 60, 0));
+  snap.samplePosition = 96000;
+
+  const std::string path = temp_path("cc_dedup_exempt");
+  ASSERT_TRUE(write_smf1(path, snap, default_options()), "write succeeded");
+
+  smf::MidiFile mf;
+  ASSERT_TRUE(mf.read(path), "read back");
+  const int ch1 = find_track_by_name(mf, "Ch 1");
+  ASSERT_TRUE(ch1 >= 0, "ch1 exists");
+  int count1E = 0, count1D = 0;
+  for (int i = 0; i < mf[ch1].getEventCount(); ++i) {
+    auto &ev = mf[ch1][i];
+    if (ev.size() == 3 && (ev[0] & 0xF0) == 0xB0) {
+      if (ev[1] == 0x1E)
+        ++count1E;
+      else if (ev[1] == 0x1D)
+        ++count1D;
+    }
+  }
+  ASSERT_EQ(count1E, 2, "both 0x1E prefixes survive dedup");
+  ASSERT_EQ(count1D, 2, "both 0x1D values survive dedup");
+}
+
 // A tempo record with non-positive bpm must be ignored by the core; exercise
 // the public method directly.
 void test_core_rejects_nonpositive_tempo() {
@@ -424,6 +503,9 @@ int main() {
   test_orphan_note_off_is_benign();
   test_system_bytes_are_ignored();
   test_same_tick_note_pair_keeps_order();
+  test_cc_dedup_collapses_consecutive_repeats();
+  test_cc_dedup_preserves_value_changes();
+  test_cc_dedup_exempts_gba_prefix_pair();
   test_core_rejects_nonpositive_tempo();
   test_core_rejects_inverted_loop();
 

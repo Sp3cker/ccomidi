@@ -114,6 +114,7 @@ set_target_properties(ccomidi PROPERTIES
 )
 
 if(APPLE)
+    set(CLAP_INSTALL_DIR "$ENV{HOME}/Library/Audio/Plug-Ins/CLAP")
     set_target_properties(ccomidi PROPERTIES
         BUNDLE TRUE
         BUNDLE_EXTENSION "clap"
@@ -122,6 +123,11 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/Info.plist"
             "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi>/Info.plist"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf
+            "${CLAP_INSTALL_DIR}/ccomidi.clap"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:ccomidi>"
+            "${CLAP_INSTALL_DIR}/ccomidi.clap"
     )
 endif()
 
@@ -191,5 +197,10 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/recorder/Info.plist"
             "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi_recorder>/Info.plist"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf
+            "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:ccomidi_recorder>"
+            "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
     )
 endif()

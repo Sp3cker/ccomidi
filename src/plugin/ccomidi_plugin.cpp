@@ -261,16 +261,31 @@ clap_param_info_flags param_flags_for_id(clap_id id) {
            CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
   case ParamKind::RowType:
     if (is_fixed_command_row(address.row))
-      return CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
+      return CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM | CLAP_PARAM_IS_HIDDEN;
     return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS |
            CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
+  case ParamKind::RowValue0:
+  case ParamKind::RowValue1:
+  case ParamKind::RowValue2:
+  case ParamKind::RowValue3: {
+    clap_param_info_flags flags =
+        CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS;
+    if (is_fixed_command_row(address.row)) {
+      const std::uint32_t field =
+          static_cast<std::uint32_t>(address.kind) -
+          static_cast<std::uint32_t>(ParamKind::RowValue0);
+      const CommandType type = fixed_command_type_for_row(address.row);
+      if (field >= command_spec(type).fieldCount)
+        flags |= CLAP_PARAM_IS_HIDDEN;
+    }
+    return flags;
+  }
   case ParamKind::OutputChannel:
   case ParamKind::Program:
   case ParamKind::ProgramEnabled:
     return 0;
-  default:
-    return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS;
   }
+  return CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_REQUIRES_PROCESS;
 }
 
 void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {

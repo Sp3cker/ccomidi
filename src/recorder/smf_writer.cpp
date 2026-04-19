@@ -102,6 +102,14 @@ bool write_smf1(const std::string &path,
     double currentBpm = initBpm;
     int lastTickPerChannel[16] = {0};
     std::unordered_set<std::uint16_t> heldNotes;
+    // Per (channel, controller) last-emitted CC value, -1 = unset. Used to drop
+    // consecutive CCs with the same value. Exempts controllers 0x1D/0x1E, which
+    // form GBA prefix/value command pairs whose repeats are semantically
+    // distinct (see test_same_tick_cc_arrival_order_preserved).
+    int lastCcValue[16][128];
+    for (auto &row : lastCcValue)
+      for (auto &v : row)
+        v = -1;
     std::size_t mi = 0;
     std::size_t ti = 0;
     while (mi < snapshot.midi.size() || ti < snapshot.tempo.size()) {
@@ -130,6 +138,11 @@ bool write_smf1(const std::string &path,
         const int track = channelTrack[channel];
         if (track < 0)
           continue;
+        if ((m.status & 0xF0) == 0xB0 && m.data1 != 0x1D && m.data1 != 0x1E) {
+          if (lastCcValue[channel][m.data1] == m.data2)
+            continue;
+          lastCcValue[channel][m.data1] = m.data2;
+        }
         const int tick =
             ticks_for_sample(m.sampleTime, sampleRate, currentBpm, ppq);
         std::vector<uchar> bytes;

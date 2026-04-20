@@ -615,10 +615,21 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
     std::lock_guard<std::mutex> lock(self->stateMutex);
     activeOutputChannel = self->core.output_channel();
     pendingAddIndex = self->pendingAddInstrumentIndex;
-    // BISECT: write-reset removed; emission still disabled.
+    self->pendingAddInstrumentIndex = -1;
   }
-  (void)activeOutputChannel;
-  (void)pendingAddIndex;
+  // Transmit any pending "add instrument" request as a CC#98 (index LSB) +
+  // CC#99 (index MSB, trigger) pair. 14-bit index gives poryaaaa up to 16384
+  // entries to address.
+  if (pendingAddIndex >= 0 && pendingAddIndex <= 0x3FFF) {
+    const std::uint8_t status =
+        static_cast<std::uint8_t>(0xB0 | (activeOutputChannel & 0x0F));
+    push_midi_event(0, status, 98,
+                    static_cast<std::uint8_t>(pendingAddIndex & 0x7F),
+                    process->out_events);
+    push_midi_event(0, status, 99,
+                    static_cast<std::uint8_t>((pendingAddIndex >> 7) & 0x7F),
+                    process->out_events);
+  }
 
   bool currentPlaying = initialPlaying;
   std::uint32_t sliceStart = 0;

@@ -610,10 +610,15 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
   push_planned_events(pendingUiEvents, 0, process->out_events);
 
   std::uint8_t activeOutputChannel = 0;
+  int pendingAddIndex = -1;
   {
     std::lock_guard<std::mutex> lock(self->stateMutex);
     activeOutputChannel = self->core.output_channel();
+    pendingAddIndex = self->pendingAddInstrumentIndex;
+    // BISECT: write-reset removed; emission still disabled.
   }
+  (void)activeOutputChannel;
+  (void)pendingAddIndex;
 
   bool currentPlaying = initialPlaying;
   std::uint32_t sliceStart = 0;

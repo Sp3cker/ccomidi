@@ -40,6 +40,17 @@ struct Plugin {
   std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
   bool pendingParamInfoRescan = false;
   VoiceSlotLoad voiceLoad = {};
+  // Cache-line-isolated: plugin_process reads pendingAddInstrumentIndex on
+  // every block, and the editor reads availableSelection every frame once
+  // availableInstruments is populated. Without alignas, both fields shared
+  // the same cache line as whatever followed voiceLoad — causing false
+  // sharing that manifested as UI lag the moment state.json loaded.
+  // Index (into voiceLoad.availableInstruments) the UI has asked us to
+  // transmit as a CC#98 LSB + CC#99 MSB pair. -1 means nothing pending.
+  // Consumed by plugin_process. Valid range 0..16383 (14-bit).
+  alignas(64) int pendingAddInstrumentIndex = -1;
+  // Last-selected index in the "available instruments" dropdown. UI-local.
+  alignas(64) int availableSelection = 0;
 };
 
 const char *command_type_name(CommandType type);

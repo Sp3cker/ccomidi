@@ -220,6 +220,58 @@ VoiceSlotLoad voicegroup_bridge_load_state() {
                        ? std::string("state.json has no slots.")
                        : "Voicegroup '" + voicegroupName +
                              "' has no sample-bearing slots.";
+
+  // Optional block: project-wide "available to append" instruments. Indices
+  // here are exactly what gets sent as the CC#99 value on Add.
+  const char *availCursor = body.c_str();
+  if (find_key(availCursor, "availableInstruments")) {
+    while (*availCursor && *availCursor != '[')
+      ++availCursor;
+    if (*availCursor == '[') {
+      ++availCursor;
+      while (*availCursor) {
+        while (*availCursor == ' ' || *availCursor == '\t' ||
+               *availCursor == '\n' || *availCursor == '\r' ||
+               *availCursor == ',')
+          ++availCursor;
+        if (*availCursor == ']' || *availCursor == '\0')
+          break;
+        if (*availCursor != '{')
+          break;
+
+        const char *objStart = availCursor;
+        int depth = 0;
+        const char *objEnd = availCursor;
+        while (*objEnd) {
+          if (*objEnd == '{') ++depth;
+          else if (*objEnd == '}') {
+            --depth;
+            if (depth == 0) { ++objEnd; break; }
+          } else if (*objEnd == '"') {
+            ++objEnd;
+            while (*objEnd && *objEnd != '"') {
+              if (*objEnd == '\\' && objEnd[1]) objEnd += 2;
+              else ++objEnd;
+            }
+            if (*objEnd == '"') ++objEnd;
+            continue;
+          }
+          ++objEnd;
+        }
+
+        std::string obj(objStart, static_cast<size_t>(objEnd - objStart));
+        const char *oc = obj.c_str();
+        std::string name;
+        if (find_key(oc, "name"))
+          parse_json_string(oc, name);
+        if (!name.empty())
+          result.availableInstruments.push_back(std::move(name));
+
+        availCursor = objEnd;
+      }
+    }
+  }
+
   return result;
 }
 

@@ -100,6 +100,7 @@ endif()
 
 add_library(ccomidi MODULE
     src/plugin/ccomidi_plugin.cpp
+    src/plugin/voicegroup_bridge.cpp
     src/gui/ccomidi_editor.cpp
 )
 

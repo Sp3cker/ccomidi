@@ -204,6 +204,8 @@ void draw_frame(void *userData, std::uint32_t width, std::uint32_t height) {
   if (!plugin)
     return;
 
+  reload_voicegroup_if_changed(plugin);
+
   UiSnapshot snapshot = {};
   fill_ui_snapshot(plugin, &snapshot);
 
@@ -232,10 +234,41 @@ void draw_frame(void *userData, std::uint32_t width, std::uint32_t height) {
                           programEnabled ? 1.0 : 0.0);
 
   int program = static_cast<int>(std::floor(snapshot.program));
+  program = std::clamp(program, 0, 127);
   ImGui::BeginDisabled(!programEnabled);
-  if (ImGui::InputInt("Program", &program, 1, 8)) {
-    program = std::clamp(program, 0, 127);
-    apply_ui_param_change(plugin, kParamProgram, static_cast<double>(program));
+  if (!plugin->voiceLoad.slots.empty()) {
+    const VoiceSlot *current = nullptr;
+    for (const VoiceSlot &slot : plugin->voiceLoad.slots) {
+      if (slot.program == program) {
+        current = &slot;
+        break;
+      }
+    }
+    char preview[288];
+    if (current)
+      std::snprintf(preview, sizeof(preview), "%03d  %s", current->program,
+                    current->name.c_str());
+    else
+      std::snprintf(preview, sizeof(preview), "%03d  (empty slot)", program);
+    if (ImGui::BeginCombo("Program", preview)) {
+      for (const VoiceSlot &slot : plugin->voiceLoad.slots) {
+        char label[288];
+        std::snprintf(label, sizeof(label), "%03d  %s", slot.program,
+                      slot.name.c_str());
+        const bool selected = slot.program == program;
+        if (ImGui::Selectable(label, selected))
+          apply_ui_param_change(plugin, kParamProgram,
+                                static_cast<double>(slot.program));
+        if (selected)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  } else {
+    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Voicegroup: %s",
+                       plugin->voiceLoad.error.c_str());
+    if (!plugin->voiceLoad.statePath.empty())
+      ImGui::TextDisabled("state: %s", plugin->voiceLoad.statePath.c_str());
   }
   ImGui::EndDisabled();
 

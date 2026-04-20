@@ -453,7 +453,8 @@ void SenderCore::emit_preapplied_changes(
     bool transportIsPlaying, bool channelChanged,
     const std::array<bool, kMaxCommandRows> &rowChanged, std::uint32_t time,
     PlannedEvents *out, bool programChanged) {
-  if (!transportIsPlaying || !out)
+  (void)transportIsPlaying;
+  if (!out)
     return;
 
   out->clear();

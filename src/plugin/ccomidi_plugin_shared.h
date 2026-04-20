@@ -3,10 +3,12 @@
 
 #include <array>
 #include <mutex>
+#include <vector>
 
 #include <clap/clap.h>
 
 #include "core/sender_core.h"
+#include "plugin/voicegroup_bridge.h"
 
 namespace ccomidi {
 
@@ -37,12 +39,14 @@ struct Plugin {
   bool pendingUiProgramChange = false;
   std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
   bool pendingParamInfoRescan = false;
+  VoiceSlotLoad voiceLoad = {};
 };
 
 const char *command_type_name(CommandType type);
 void fill_ui_snapshot(Plugin *plugin, UiSnapshot *snapshot);
 void apply_ui_param_change(Plugin *plugin, clap_id paramId, double value);
 void request_host_param_sync(Plugin *plugin);
+void reload_voicegroup_if_changed(Plugin *plugin);
 
 } // namespace ccomidi
 

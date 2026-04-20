@@ -433,6 +433,16 @@ void push_midi_event(std::uint32_t time, std::uint8_t status,
   outEvents->try_push(outEvents, &event.header);
 }
 
+void reload_voicegroup_if_changed(Plugin *plugin) {
+  if (!plugin)
+    return;
+  const long long diskMtime = voicegroup_bridge_state_mtime();
+  if (diskMtime == plugin->voiceLoad.mtimeNs)
+    return;
+  std::lock_guard<std::mutex> lock(plugin->stateMutex);
+  plugin->voiceLoad = voicegroup_bridge_load_state();
+}
+
 void request_host_param_sync(Plugin *plugin) {
   if (!plugin || !plugin->host)
     return;
@@ -591,11 +601,10 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
     self->pendingUiChannelChange = false;
     self->pendingUiProgramChange = false;
     self->pendingUiRowChanged.fill(false);
-    if (initialPlaying && wasPlaying) {
-      self->core.emit_preapplied_changes(
-          true, pendingUiChannelChange, pendingUiRowChanged, 0,
-          &pendingUiEvents, pendingUiProgramChange);
-    }
+    self->core.emit_preapplied_changes(
+        initialPlaying, pendingUiChannelChange, pendingUiRowChanged, 0,
+        &pendingUiEvents, pendingUiProgramChange);
+    (void)wasPlaying;
   }
 
   push_planned_events(pendingUiEvents, 0, process->out_events);
@@ -1139,29 +1148,45 @@ bool params_text_to_value(const clap_plugin_t *plugin, clap_id paramId,
 
 void params_flush(const clap_plugin_t *plugin, const clap_input_events_t *in,
                   const clap_output_events_t *out) {
-  (void)out;
   Plugin *self = from_plugin(plugin);
   if (!self || !in)
     return;
 
-  std::lock_guard<std::mutex> lock(self->stateMutex);
-  const std::uint32_t count = in->size(in);
-  for (std::uint32_t i = 0; i < count; ++i) {
-    const clap_event_header_t *header = in->get(in, i);
-    if (!header || header->space_id != CLAP_CORE_EVENT_SPACE_ID ||
-        header->type != CLAP_EVENT_PARAM_VALUE)
-      continue;
+  bool channelChanged = false;
+  bool programChanged = false;
+  std::array<bool, kMaxCommandRows> rowChanged = {};
+  PlannedEvents planned = {};
+  {
+    std::lock_guard<std::mutex> lock(self->stateMutex);
+    const std::uint32_t count = in->size(in);
+    for (std::uint32_t i = 0; i < count; ++i) {
+      const clap_event_header_t *header = in->get(in, i);
+      if (!header || header->space_id != CLAP_CORE_EVENT_SPACE_ID ||
+          header->type != CLAP_EVENT_PARAM_VALUE)
+        continue;
 
-    const auto *event =
-        reinterpret_cast<const clap_event_param_value_t *>(header);
-    ParamAddress address = {};
-    if (!decode_param_id(event->param_id, &address))
-      continue;
-    self->core.apply_parameter_change(AutomationEvent{0, address, event->value},
-                                      nullptr, nullptr);
-    if (should_rescan_param_info(address))
-      schedule_param_info_rescan(self);
+      const auto *event =
+          reinterpret_cast<const clap_event_param_value_t *>(header);
+      ParamAddress address = {};
+      if (!decode_param_id(event->param_id, &address))
+        continue;
+
+      bool localChannelChanged = false;
+      bool localProgramChanged = false;
+      self->core.apply_parameter_change(
+          AutomationEvent{0, address, event->value}, &localChannelChanged,
+          &rowChanged, &localProgramChanged);
+      channelChanged = channelChanged || localChannelChanged;
+      programChanged = programChanged || localProgramChanged;
+      if (should_rescan_param_info(address))
+        schedule_param_info_rescan(self);
+    }
+
+    self->core.emit_preapplied_changes(false, channelChanged, rowChanged, 0,
+                                       &planned, programChanged);
   }
+
+  push_planned_events(planned, 0, out);
 }
 
 const clap_plugin_params_t s_params = {
@@ -1350,6 +1375,7 @@ const clap_plugin_t *factory_create_plugin(const clap_plugin_factory_t *factory,
   self->host = host;
   self->clapPlugin = s_pluginPrototype;
   self->clapPlugin.plugin_data = self;
+  self->voiceLoad = voicegroup_bridge_load_state();
   return &self->clapPlugin;
 }
 
@@ -1360,7 +1386,7 @@ const clap_plugin_factory_t s_factory = {
 };
 
 bool entry_init(const char *pluginPath) {
-  (void)pluginPath;
+  voicegroup_bridge_set_plugin_path(pluginPath);
   return true;
 }
 

@@ -278,43 +278,6 @@ void draw_frame(void *userData, std::uint32_t width, std::uint32_t height) {
 
   ImGui::Spacing();
 
-  // "Add to voicegroup" — picking an instrument from the project-wide list
-  // immediately asks poryaaaa to append it. ccomidi sends a CC#98 + CC#99
-  // pair (14-bit index) on the next process block; no Add button needed.
-  if (!plugin->voiceLoad.availableInstruments.empty()) {
-    const auto &items = plugin->voiceLoad.availableInstruments;
-    int sel = plugin->availableSelection;
-    if (sel < 0 || sel >= static_cast<int>(items.size()))
-      sel = 0;
-    ImGui::TextUnformatted("Available instrument");
-    ImGui::SetNextItemWidth(260.0f);
-    if (ImGui::BeginCombo("##available_instrument", items[sel].c_str())) {
-      // Virtualize: with thousands of entries, evaluating a Selectable for
-      // every item every frame the popup is open turns into real frame lag.
-      ImGuiListClipper clipper;
-      clipper.Begin(static_cast<int>(items.size()));
-      while (clipper.Step()) {
-        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-          const bool selected = (i == sel);
-          if (ImGui::Selectable(items[i].c_str(), selected)) {
-            plugin->availableSelection = i;
-            {
-              std::lock_guard<std::mutex> lock(plugin->stateMutex);
-              plugin->pendingAddInstrumentIndex = i;
-            }
-            if (plugin->host && plugin->host->request_process)
-              plugin->host->request_process(plugin->host);
-          }
-          if (selected)
-            ImGui::SetItemDefaultFocus();
-        }
-      }
-      ImGui::EndCombo();
-    }
-  }
-
-  ImGui::Spacing();
-
   if (ImGui::BeginTable("fixed_rows", 4,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
     ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed,

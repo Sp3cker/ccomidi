@@ -1,0 +1,182 @@
+diff --git a/src/detail/vst3/process.cpp b/src/detail/vst3/process.cpp
+index 64b382d..d62e7cd 100644
+--- a/src/detail/vst3/process.cpp
++++ b/src/detail/vst3/process.cpp
+@@ -685,6 +685,64 @@ void ProcessAdapter::processInputEvents(Steinberg::Vst::IEventList* eventlist)
+             }
+           }
+         }
++        if (vstevent.type == Vst::Event::kLegacyMIDICCOutEvent)
++        {
++          clap_multi_event_t n;
++          n.param.header.type = CLAP_EVENT_MIDI;
++          n.param.header.flags = (vstevent.flags & Vst::Event::kIsLive) ? CLAP_EVENT_IS_LIVE : 0;
++          n.param.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
++          n.param.header.time = vstevent.sampleOffset;
++          n.param.header.size = sizeof(clap_event_midi_t);
++          n.midi.port_index = 0;
++
++          const uint8_t ch = static_cast<uint8_t>(vstevent.midiCCOut.channel & 0x0F);
++          const uint8_t ctrl = vstevent.midiCCOut.controlNumber;
++          const uint8_t v1 = static_cast<uint8_t>(vstevent.midiCCOut.value) & 0x7F;
++          const uint8_t v2 = static_cast<uint8_t>(vstevent.midiCCOut.value2) & 0x7F;
++
++          bool emit = true;
++          switch (ctrl)
++          {
++            case Vst::ControllerNumbers::kAfterTouch:  // channel pressure
++              n.midi.data[0] = 0xD0 | ch;
++              n.midi.data[1] = v1;
++              n.midi.data[2] = 0;
++              break;
++            case Vst::ControllerNumbers::kPitchBend:
++              n.midi.data[0] = 0xE0 | ch;
++              n.midi.data[1] = v1;  // LSB
++              n.midi.data[2] = v2;  // MSB
++              break;
++            case Vst::ControllerNumbers::kCtrlProgramChange:
++              n.midi.data[0] = 0xC0 | ch;
++              n.midi.data[1] = v1;
++              n.midi.data[2] = 0;
++              break;
++            case Vst::ControllerNumbers::kCtrlPolyPressure:
++              n.midi.data[0] = 0xA0 | ch;
++              n.midi.data[1] = v1;  // pitch
++              n.midi.data[2] = v2;  // pressure
++              break;
++            default:
++              if (ctrl < 128)  // regular CC 0-127
++              {
++                n.midi.data[0] = 0xB0 | ch;
++                n.midi.data[1] = ctrl;
++                n.midi.data[2] = v1;
++              }
++              else
++              {
++                emit = false;  // unknown extended controller
++              }
++              break;
++          }
++
++          if (emit)
++          {
++            _eventindices.push_back(_events.size());
++            _events.push_back(n);
++          }
++        }
+       }
+     }
+   }
+@@ -808,8 +866,112 @@ bool ProcessAdapter::enqueueOutputEvent(const clap_event_header_t* event)
+       break;
+ 
+     case CLAP_EVENT_MIDI:
++    {
++      auto mev = reinterpret_cast<const clap_event_midi*>(event);
++      const uint8_t status = mev->data[0] & 0xF0;
++      const int8_t channel = static_cast<int8_t>(mev->data[0] & 0x0F);
++      const uint8_t data1 = mev->data[1];
++      const uint8_t data2 = mev->data[2];
++
++      Steinberg::Vst::Event oe{};
++      oe.busIndex = 0;
++      oe.sampleOffset = mev->header.time;
++
++      bool emit = true;
++      switch (status)
++      {
++        case 0x90:  // Note On (vel 0 folds to Note Off)
++          if (data2 > 0)
++          {
++            oe.type = Steinberg::Vst::Event::kNoteOnEvent;
++            oe.noteOn.channel = channel;
++            oe.noteOn.pitch = data1;
++            oe.noteOn.velocity = data2 / 127.0f;
++            oe.noteOn.length = 0;
++            oe.noteOn.tuning = 0.0f;
++            oe.noteOn.noteId = -1;
++          }
++          else
++          {
++            oe.type = Steinberg::Vst::Event::kNoteOffEvent;
++            oe.noteOff.channel = channel;
++            oe.noteOff.pitch = data1;
++            oe.noteOff.velocity = 0.0f;
++            oe.noteOff.tuning = 0.0f;
++            oe.noteOff.noteId = -1;
++          }
++          break;
++        case 0x80:  // Note Off
++          oe.type = Steinberg::Vst::Event::kNoteOffEvent;
++          oe.noteOff.channel = channel;
++          oe.noteOff.pitch = data1;
++          oe.noteOff.velocity = data2 / 127.0f;
++          oe.noteOff.tuning = 0.0f;
++          oe.noteOff.noteId = -1;
++          break;
++        case 0xA0:  // Polyphonic Key Pressure
++          oe.type = Steinberg::Vst::Event::kPolyPressureEvent;
++          oe.polyPressure.channel = channel;
++          oe.polyPressure.pitch = data1;
++          oe.polyPressure.pressure = data2 / 127.0f;
++          oe.polyPressure.noteId = -1;
++          break;
++        case 0xB0:  // Control Change
++          oe.type = Steinberg::Vst::Event::kLegacyMIDICCOutEvent;
++          oe.midiCCOut.controlNumber = data1;
++          oe.midiCCOut.channel = channel;
++          oe.midiCCOut.value = static_cast<int8_t>(data2);
++          oe.midiCCOut.value2 = 0;
++          break;
++        case 0xC0:  // Program Change
++          oe.type = Steinberg::Vst::Event::kLegacyMIDICCOutEvent;
++          oe.midiCCOut.controlNumber = Steinberg::Vst::ControllerNumbers::kCtrlProgramChange;
++          oe.midiCCOut.channel = channel;
++          oe.midiCCOut.value = static_cast<int8_t>(data1);
++          oe.midiCCOut.value2 = 0;
++          break;
++        case 0xD0:  // Channel Pressure (Aftertouch)
++          oe.type = Steinberg::Vst::Event::kLegacyMIDICCOutEvent;
++          oe.midiCCOut.controlNumber = Steinberg::Vst::ControllerNumbers::kAfterTouch;
++          oe.midiCCOut.channel = channel;
++          oe.midiCCOut.value = static_cast<int8_t>(data1);
++          oe.midiCCOut.value2 = 0;
++          break;
++        case 0xE0:  // Pitch Bend
++          oe.type = Steinberg::Vst::Event::kLegacyMIDICCOutEvent;
++          oe.midiCCOut.controlNumber = Steinberg::Vst::ControllerNumbers::kPitchBend;
++          oe.midiCCOut.channel = channel;
++          oe.midiCCOut.value = static_cast<int8_t>(data1);   // LSB
++          oe.midiCCOut.value2 = static_cast<int8_t>(data2);  // MSB
++          break;
++        default:
++          // Realtime/system messages (0xF0-0xFF excluding sysex) have no
++          // VST3 Event representation; drop.
++          emit = false;
++          break;
++      }
++
++      if (emit && _vstdata && _vstdata->outputEvents)
++        _vstdata->outputEvents->addEvent(oe);
++    }
++      return true;
++      break;
+     case CLAP_EVENT_MIDI_SYSEX:
++    {
++      auto sev = reinterpret_cast<const clap_event_midi_sysex*>(event);
++      Steinberg::Vst::Event oe{};
++      oe.type = Steinberg::Vst::Event::kDataEvent;
++      oe.busIndex = 0;
++      oe.sampleOffset = sev->header.time;
++      oe.data.size = sev->size;
++      oe.data.type = Steinberg::Vst::DataEvent::DataTypes::kMidiSysEx;
++      oe.data.bytes = sev->buffer;
++      if (_vstdata && _vstdata->outputEvents) _vstdata->outputEvents->addEvent(oe);
++    }
++      return true;
++      break;
+     case CLAP_EVENT_MIDI2:
++      // MIDI 2.0 UMP has no direct VST3 Event encoding; drop for now.
+       return true;
+       break;
+     default:

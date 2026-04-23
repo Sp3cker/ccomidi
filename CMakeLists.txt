@@ -7,8 +7,40 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PUGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pugl")
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
-set(CLAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap/include")
 add_compile_options(-Wall -Wextra -Wunused-variable -Wunused-function -g)
+
+# ---- CLAP SDK ----
+set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/clap)
+
+# ---- clap-wrapper (produces VST3 bundle from CLAP plugin) ----
+# Apply vendored clap-wrapper patches idempotently. The patch adds a
+# CLAP_EVENT_MIDI <-> VST3 event bridge (output-side and input-side) that
+# upstream clap-wrapper does not yet ship; see patches/README for details.
+# Marker `kLegacyMIDICCOutEvent` appears only after the patch is applied,
+# so the check is safe against re-runs and against `git submodule update`.
+set(_ccomidi_wrapper_proc
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap-wrapper/src/detail/vst3/process.cpp")
+if(EXISTS "${_ccomidi_wrapper_proc}")
+    file(READ "${_ccomidi_wrapper_proc}" _ccomidi_wrapper_content)
+    if(NOT _ccomidi_wrapper_content MATCHES "kLegacyMIDICCOutEvent")
+        execute_process(
+            COMMAND git apply --verbose
+                    "${CMAKE_CURRENT_SOURCE_DIR}/patches/clap-wrapper-midi-event-bridge.patch"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clap-wrapper"
+            RESULT_VARIABLE _ccomidi_patch_result
+            ERROR_VARIABLE  _ccomidi_patch_err)
+        if(NOT _ccomidi_patch_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to apply clap-wrapper patch: ${_ccomidi_patch_err}")
+        endif()
+        message(STATUS "ccomidi: applied clap-wrapper MIDI-event-bridge patch")
+    endif()
+endif()
+
+set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES TRUE CACHE BOOL "" FORCE)
+set(CLAP_WRAPPER_COPY_AFTER_BUILD TRUE CACHE BOOL "" FORCE)
+add_subdirectory(third_party/clap-wrapper)
 
 if(WIN32)
     set(PUGL_PLATFORM_SOURCES
@@ -74,12 +106,13 @@ add_library(ccomidi_gui STATIC
 
 target_include_directories(ccomidi_gui PUBLIC
     src
-    ${CLAP_SDK_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${PUGL_DIR}/include
     ${PUGL_DIR}/src
 )
+
+target_link_libraries(ccomidi_gui PUBLIC clap)
 
 target_compile_definitions(ccomidi_gui PUBLIC
     PUGL_STATIC
@@ -109,28 +142,10 @@ target_link_libraries(ccomidi PRIVATE
     ccomidi_gui
 )
 
-set_target_properties(ccomidi PROPERTIES
-    PREFIX ""
-    SUFFIX ".clap"
+target_add_vst3_wrapper(
+    TARGET ccomidi
+    OUTPUT_NAME "ccomidi"
 )
-
-if(APPLE)
-    set(CLAP_INSTALL_DIR "$ENV{HOME}/Library/Audio/Plug-Ins/CLAP")
-    set_target_properties(ccomidi PROPERTIES
-        BUNDLE TRUE
-        BUNDLE_EXTENSION "clap"
-    )
-    add_custom_command(TARGET ccomidi POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/Info.plist"
-            "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi>/Info.plist"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf
-            "${CLAP_INSTALL_DIR}/ccomidi.clap"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_BUNDLE_DIR:ccomidi>"
-            "${CLAP_INSTALL_DIR}/ccomidi.clap"
-    )
-endif()
 
 set(MIDIFILE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/midifile")
 
@@ -174,34 +189,13 @@ add_library(ccomidi_recorder MODULE
     src/plugin/recorder/recorder_editor.cpp
 )
 
-target_include_directories(ccomidi_recorder PRIVATE
-    ${CLAP_SDK_DIR}
-)
-
 target_link_libraries(ccomidi_recorder PRIVATE
     ccomidi_recorder_core
     ccomidi_gui
+    clap
 )
 
-set_target_properties(ccomidi_recorder PROPERTIES
-    PREFIX ""
-    SUFFIX ".clap"
+target_add_vst3_wrapper(
+    TARGET ccomidi_recorder
     OUTPUT_NAME "ccomidi_recorder"
 )
-
-if(APPLE)
-    set_target_properties(ccomidi_recorder PROPERTIES
-        BUNDLE TRUE
-        BUNDLE_EXTENSION "clap"
-    )
-    add_custom_command(TARGET ccomidi_recorder POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/recorder/Info.plist"
-            "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi_recorder>/Info.plist"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf
-            "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_BUNDLE_DIR:ccomidi_recorder>"
-            "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
-    )
-endif()

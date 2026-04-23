@@ -13,10 +13,6 @@ struct VoiceSlot {
 
 struct VoiceSlotLoad {
   std::vector<VoiceSlot> slots;
-  // Instruments available for append into the current voicegroup. The index
-  // into this vector is what gets sent as the CC#99 value; poryaaaa uses the
-  // same index to look up the macro line to append.
-  std::vector<std::string> availableInstruments;
   std::string statePath;   // path the bridge looked at (empty if unknown)
   std::string error;       // empty on success; otherwise why no slots are shown
   long long mtimeNs = 0;   // mtime of state file when parsed, 0 if not found

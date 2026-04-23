@@ -4,3 +4,6 @@
 [submodule "third_party/midifile"]
 	path = third_party/midifile
 	url = https://github.com/craigsapp/midifile
+[submodule "third_party/clap-wrapper"]
+	path = third_party/clap-wrapper
+	url = https://github.com/free-audio/clap-wrapper.git

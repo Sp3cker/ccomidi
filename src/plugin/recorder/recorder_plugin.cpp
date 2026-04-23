@@ -8,6 +8,9 @@
 #include <clap/fixedpoint.h>
 #include <clap/plugin-features.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -165,11 +168,30 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
     if (process->out_events)
       process->out_events->try_push(process->out_events, header);
 
-    if (isPlaying && header->space_id == CLAP_CORE_EVENT_SPACE_ID &&
-        header->type == CLAP_EVENT_MIDI) {
-      const auto *midi = reinterpret_cast<const clap_event_midi_t *>(header);
-      self->core.push_event_in_block(header->time, midi->data[0], midi->data[1],
-                                     midi->data[2]);
+    if (isPlaying && header->space_id == CLAP_CORE_EVENT_SPACE_ID) {
+      if (header->type == CLAP_EVENT_MIDI) {
+        const auto *midi = reinterpret_cast<const clap_event_midi_t *>(header);
+        self->core.push_event_in_block(header->time, midi->data[0],
+                                       midi->data[1], midi->data[2]);
+      } else if (header->type == CLAP_EVENT_NOTE_ON ||
+                 header->type == CLAP_EVENT_NOTE_OFF ||
+                 header->type == CLAP_EVENT_NOTE_CHOKE) {
+        const auto *note = reinterpret_cast<const clap_event_note_t *>(header);
+        const std::uint8_t channel =
+            static_cast<std::uint8_t>(note->channel & 0x0F);
+        const std::uint8_t key = static_cast<std::uint8_t>(
+            std::clamp<int>(static_cast<int>(note->key), 0, 127));
+        std::uint8_t velocity = static_cast<std::uint8_t>(std::clamp<int>(
+            static_cast<int>(std::lround(note->velocity * 127.0)), 0, 127));
+        const bool isNoteOn = header->type == CLAP_EVENT_NOTE_ON;
+        const std::uint8_t status =
+            static_cast<std::uint8_t>((isNoteOn ? 0x90 : 0x80) | channel);
+        if (isNoteOn && velocity == 0)
+          velocity = 1;
+        if (header->type == CLAP_EVENT_NOTE_CHOKE)
+          velocity = 0;
+        self->core.push_event_in_block(header->time, status, key, velocity);
+      }
     }
   }
 
@@ -405,7 +427,7 @@ bool note_ports_get(const clap_plugin_t *plugin, std::uint32_t index,
 
   std::memset(info, 0, sizeof(*info));
   info->id = 0;
-  info->supported_dialects = CLAP_NOTE_DIALECT_MIDI;
+  info->supported_dialects = CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_CLAP;
   info->preferred_dialect = CLAP_NOTE_DIALECT_MIDI;
   std::snprintf(info->name, sizeof(info->name), "%s",
                 isInput ? "MIDI Input" : "MIDI Output");

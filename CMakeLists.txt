@@ -9,29 +9,12 @@ set(PUGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pugl")
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
 add_compile_options(-Wall -Wextra -Wunused-variable -Wunused-function -g)
 
-# ---- clap-wrapper (for VST3 build) ----
-# We only ship a CLAP SDK locally under third_party/clap, so clap-wrapper's
-# `clap` imported target wouldn't otherwise exist in this build. Pull the
-# wrapper down with FetchContent and let it wire the CLAP target alongside.
-# Pinned to the same commit poryaaaa uses so both projects stay in lockstep.
-include(FetchContent)
-set(CLAP_WRAPPER_DOWNLOAD_DEPENDENCIES TRUE CACHE BOOL "" FORCE)
-set(CLAP_WRAPPER_BUILD_STANDALONE FALSE CACHE BOOL "" FORCE)
-set(CLAP_WRAPPER_BUILD_AUV2 FALSE CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    clap_wrapper
-    GIT_REPOSITORY https://github.com/free-audio/clap-wrapper.git
-    GIT_TAG        62bf4f193d8dac354a946c1e0cffda9174317042
-)
-FetchContent_MakeAvailable(clap_wrapper)
-if(TARGET clap-wrapper-compile-options)
-    target_compile_options(clap-wrapper-compile-options INTERFACE
-        -Wno-error=return-type
-        # ccomidi uses C99-style designated initializers in C++ files;
-        # AUv2 build adds -Werror which flags these as c++20-designator.
-        -Wno-error=c++20-designator
-    )
-endif()
+# ---- CLAP SDK ----
+# CLAP-only build. clap-wrapper / VST3 rigging was removed; this project
+# now ships exclusively as .clap. The vendored submodule under
+# third_party/clap provides the `clap` imported target consumed below.
+set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/clap)
 
 if(WIN32)
     set(PUGL_PLATFORM_SOURCES
@@ -133,11 +116,6 @@ target_link_libraries(ccomidi PRIVATE
     ccomidi_gui
 )
 
-target_add_vst3_wrapper(
-    TARGET ccomidi
-    OUTPUT_NAME "ccomidi"
-)
-
 if(APPLE)
     set(CLAP_INSTALL_DIR "$ENV{HOME}/Library/Audio/Plug-Ins/CLAP")
     set_target_properties(ccomidi PROPERTIES
@@ -208,11 +186,6 @@ target_link_libraries(ccomidi_recorder PRIVATE
     clap
 )
 
-target_add_vst3_wrapper(
-    TARGET ccomidi_recorder
-    OUTPUT_NAME "ccomidi_recorder"
-)
-
 if(APPLE)
     set_target_properties(ccomidi_recorder PROPERTIES
         BUNDLE TRUE
@@ -228,80 +201,6 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "$<TARGET_BUNDLE_DIR:ccomidi_recorder>"
             "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
-    )
-endif()
-
-# ---- VST3 targets (clap-wrapper) ----
-# Each VST3 target rebuilds the plugin sources alongside clap-wrapper's
-# VST3 entry. The wrapper discovers our plugin via the `clap_entry` symbol
-# defined in the respective `*_plugin.cpp`, so the same source is compiled
-# once per format rather than extracted into a shared static library.
-if(APPLE)
-    set(VST3_INSTALL_DIR "$ENV{HOME}/Library/Audio/Plug-Ins/VST3")
-endif()
-
-# -- ccomidi (note effect / MIDI CC sender) --
-add_library(ccomidi-vst3 MODULE
-    src/plugin/ccomidi_plugin.cpp
-    src/plugin/voicegroup_bridge.cpp
-    src/gui/ccomidi_editor.cpp
-)
-
-target_link_libraries(ccomidi-vst3 PRIVATE
-    ccomidi_core
-    ccomidi_gui
-)
-
-target_add_vst3_wrapper(
-    TARGET ccomidi-vst3
-    OUTPUT_NAME "ccomidi"
-    BUNDLE_IDENTIFIER "com.sallegrezza.ccomidi.vst3"
-    BUNDLE_VERSION "1.0"
-)
-
-if(APPLE)
-    add_custom_command(TARGET ccomidi-vst3 POST_BUILD
-        COMMAND codesign -f -s - "$<TARGET_BUNDLE_DIR:ccomidi-vst3>"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_INSTALL_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf
-            "${VST3_INSTALL_DIR}/ccomidi.vst3"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_BUNDLE_DIR:ccomidi-vst3>"
-            "${VST3_INSTALL_DIR}/ccomidi.vst3"
-    )
-endif()
-
-# -- ccomidi_recorder (MIDI pass-through that captures to SMF) --
-add_library(ccomidi_recorder-vst3 MODULE
-    src/plugin/recorder/recorder_plugin.cpp
-    src/plugin/recorder/recorder_editor.cpp
-)
-
-target_include_directories(ccomidi_recorder-vst3 PRIVATE
-    ${CLAP_SDK_DIR}
-)
-
-target_link_libraries(ccomidi_recorder-vst3 PRIVATE
-    ccomidi_recorder_core
-    ccomidi_gui
-)
-
-target_add_vst3_wrapper(
-    TARGET ccomidi_recorder-vst3
-    OUTPUT_NAME "ccomidi_recorder"
-    BUNDLE_IDENTIFIER "com.sallegrezza.ccomidi.recorder.vst3"
-    BUNDLE_VERSION "1.0"
-)
-
-if(APPLE)
-    add_custom_command(TARGET ccomidi_recorder-vst3 POST_BUILD
-        COMMAND codesign -f -s - "$<TARGET_BUNDLE_DIR:ccomidi_recorder-vst3>"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_INSTALL_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf
-            "${VST3_INSTALL_DIR}/ccomidi_recorder.vst3"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_BUNDLE_DIR:ccomidi_recorder-vst3>"
-            "${VST3_INSTALL_DIR}/ccomidi_recorder.vst3"
     )
 endif()
 

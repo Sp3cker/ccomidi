@@ -19,7 +19,7 @@ struct CommandSpec {
 namespace ccomidi {
 
 // clang-format off
-inline constexpr std::array<CommandSpec, 15> kCommandSpecs = {{
+inline constexpr std::array<CommandSpec, 23> kCommandSpecs = {{
   // None = 0
   {"None",        0, {{}}},
   // Mod = 1
@@ -50,8 +50,27 @@ inline constexpr std::array<CommandSpec, 15> kCommandSpecs = {{
   {"Mem Acc 0C",  4, {{{"Op", 0, 127, 0}, {"Arg1", 0, 127, 0}, {"Arg2", 0, 127, 0}, {"Data", 0, 127, 0}}}},
   // MemAcc10 = 14
   {"Mem Acc 10",  4, {{{"Op", 0, 127, 0}, {"Arg1", 0, 127, 0}, {"Arg2", 0, 127, 0}, {"Data", 0, 127, 0}}}},
+  // XcmdType = 15 (selector 0x02)
+  {"xTYPE",       1, {{{"Type",      0, 127,  0}}}},
+  // XcmdAtta = 16 (selector 0x04)
+  {"xATTA",       1, {{{"Attack",    0, 127,  0}}}},
+  // XcmdDeca = 17 (selector 0x05)
+  {"xDECA",       1, {{{"Decay",     0, 127,  0}}}},
+  // XcmdSust = 18 (selector 0x06)
+  {"xSUST",       1, {{{"Sustain",   0, 127,  0}}}},
+  // XcmdRele = 19 (selector 0x07)
+  {"xRELE",       1, {{{"Release",   0, 127,  0}}}},
+  // XcmdLeng = 20 (selector 0x0A)
+  {"xLENG",       1, {{{"Length",    0, 127,  0}}}},
+  // XcmdSwee = 21 (selector 0x0B)
+  {"xSWEE",       1, {{{"Sweep",     0, 127,  0}}}},
+  // Xcmd0D = 22 (selector 0x0D, 4 LE bytes — store + notify)
+  {"XCMD 0D",     4, {{{"B0", 0, 127, 0}, {"B1", 0, 127, 0}, {"B2", 0, 127, 0}, {"B3", 0, 127, 0}}}},
 }};
 // clang-format on
+// xWAVE (selector 0x01) is intentionally absent: v2 stores no real address
+// over MIDI CC, so the driver is notify-only. Send it from a different path
+// if/when an encoding escape or address-table resolver is added.
 enum class CommandType : std::uint8_t {
   None = 0,
   Mod = 1,
@@ -68,6 +87,14 @@ enum class CommandType : std::uint8_t {
   XcmdIecl = 12,
   MemAcc0C = 13,
   MemAcc10 = 14,
+  XcmdType = 15,
+  XcmdAtta = 16,
+  XcmdDeca = 17,
+  XcmdSust = 18,
+  XcmdRele = 19,
+  XcmdLeng = 20,
+  XcmdSwee = 21,
+  Xcmd0D = 22,
 };
 const CommandSpec &command_spec(CommandType type);
 

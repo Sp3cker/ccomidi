@@ -80,6 +80,19 @@ const char *command_field_name(CommandType type, std::uint32_t field) {
     default:
       return "Value";
     }
+  case CommandType::Xcmd0D:
+    switch (field) {
+    case 0:
+      return "B0";
+    case 1:
+      return "B1";
+    case 2:
+      return "B2";
+    case 3:
+      return "B3";
+    default:
+      return "Value";
+    }
   case CommandType::None:
     break;
   default:
@@ -359,7 +372,7 @@ void describe_param(const Plugin *plugin, clap_id id, clap_param_info_t *info) {
           info->name, sizeof(info->name), "Row %02u Command",
           static_cast<unsigned>(address.row - kFixedCommandRowCount + 1));
       info->min_value = static_cast<double>(CommandType::None);
-      info->max_value = static_cast<double>(CommandType::MemAcc10);
+      info->max_value = static_cast<double>(CommandType::Xcmd0D);
       info->default_value = static_cast<double>(CommandType::None);
     }
     break;
@@ -1043,7 +1056,7 @@ bool params_value_to_text(const clap_plugin_t *plugin, clap_id paramId,
                   command_type_name(static_cast<CommandType>(std::clamp<int>(
                       static_cast<int>(std::floor(value)),
                       static_cast<int>(CommandType::None),
-                      static_cast<int>(CommandType::MemAcc10)))));
+                      static_cast<int>(CommandType::Xcmd0D)))));
     return true;
   default:
     std::snprintf(display, size, "%.3f", value);
@@ -1116,7 +1129,7 @@ bool params_text_to_value(const clap_plugin_t *plugin, clap_id paramId,
     }
   case ParamKind::RowType:
     for (int candidate = static_cast<int>(CommandType::None);
-         candidate <= static_cast<int>(CommandType::MemAcc10); ++candidate) {
+         candidate <= static_cast<int>(CommandType::Xcmd0D); ++candidate) {
       if (std::strcmp(display, command_type_name(
                                    static_cast<CommandType>(candidate))) == 0) {
         *value = static_cast<double>(sanitize_param_row_type(
@@ -1133,7 +1146,7 @@ bool params_text_to_value(const clap_plugin_t *plugin, clap_id paramId,
           address.row, static_cast<CommandType>(std::clamp<int>(
                            static_cast<int>(std::floor(parsed)),
                            static_cast<int>(CommandType::None),
-                           static_cast<int>(CommandType::MemAcc10)))));
+                           static_cast<int>(CommandType::Xcmd0D)))));
       return true;
     }
   default:

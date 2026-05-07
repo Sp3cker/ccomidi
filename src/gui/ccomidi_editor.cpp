@@ -24,6 +24,7 @@ int field_count_for_type(CommandType type) {
     return 0;
   case CommandType::MemAcc0C:
   case CommandType::MemAcc10:
+  case CommandType::Xcmd0D:
     return 4;
   default:
     return 1;
@@ -33,6 +34,10 @@ int field_count_for_type(CommandType type) {
 const char *field_label(CommandType type, int field) {
   if (type == CommandType::MemAcc0C || type == CommandType::MemAcc10) {
     static const char *labels[] = {"Op", "Arg1", "Arg2", "Data"};
+    return labels[field];
+  }
+  if (type == CommandType::Xcmd0D) {
+    static const char *labels[] = {"B0", "B1", "B2", "B3"};
     return labels[field];
   }
 
@@ -141,6 +146,41 @@ std::string preview_for_row(const UiSnapshot &snapshot, std::size_t row) {
     append_preview_triplet(&preview, channel, 0x0E, value1);
     append_preview_triplet(&preview, channel, 0x0F, value2);
     append_preview_triplet(&preview, channel, 0x10, value3);
+    break;
+  case CommandType::XcmdType:
+    append_preview_triplet(&preview, channel, 0x1E, 0x02);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::XcmdAtta:
+    append_preview_triplet(&preview, channel, 0x1E, 0x04);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::XcmdDeca:
+    append_preview_triplet(&preview, channel, 0x1E, 0x05);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::XcmdSust:
+    append_preview_triplet(&preview, channel, 0x1E, 0x06);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::XcmdRele:
+    append_preview_triplet(&preview, channel, 0x1E, 0x07);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::XcmdLeng:
+    append_preview_triplet(&preview, channel, 0x1E, 0x0A);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::XcmdSwee:
+    append_preview_triplet(&preview, channel, 0x1E, 0x0B);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    break;
+  case CommandType::Xcmd0D:
+    append_preview_triplet(&preview, channel, 0x1E, 0x0D);
+    append_preview_triplet(&preview, channel, 0x1D, value0);
+    append_preview_triplet(&preview, channel, 0x1D, value1);
+    append_preview_triplet(&preview, channel, 0x1D, value2);
+    append_preview_triplet(&preview, channel, 0x1D, value3);
     break;
   case CommandType::None:
     break;
@@ -353,7 +393,7 @@ void draw_frame(void *userData, std::uint32_t width, std::uint32_t height) {
       if (ImGui::BeginCombo(("##type" + std::to_string(row)).c_str(),
                             command_type_name(type))) {
         for (int candidate = static_cast<int>(CommandType::None);
-             candidate <= static_cast<int>(CommandType::MemAcc10);
+             candidate <= static_cast<int>(CommandType::Xcmd0D);
              ++candidate) {
           const auto candidateType = static_cast<CommandType>(candidate);
           if (!is_table_command_type(candidateType))

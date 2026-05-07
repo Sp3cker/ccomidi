@@ -72,7 +72,9 @@ struct MidiEvent {
 };
 
 struct PlannedEvents {
-  std::array<MidiEvent, kMaxCommandRows * kMaxCommandMessages> events = {};
+  // +1 reserves space for the optional program-change event that precedes
+  // a full snapshot so a snapshot that fills every row cannot truncate.
+  std::array<MidiEvent, 1 + kMaxCommandRows * kMaxCommandMessages> events = {};
   std::size_t count = 0;
 
   void clear() { count = 0; }

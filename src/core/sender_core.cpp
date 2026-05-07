@@ -156,7 +156,7 @@ std::uint8_t SenderCore::floor_to_u8(double value, std::uint8_t minValue,
 CommandType SenderCore::floor_to_command_type(double value) {
   const auto raw =
       floor_to_u8(value, static_cast<std::uint8_t>(CommandType::None),
-                  static_cast<std::uint8_t>(CommandType::MemAcc10));
+                  static_cast<std::uint8_t>(CommandType::Xcmd0D));
   return static_cast<CommandType>(raw);
 }
 
@@ -231,6 +231,41 @@ SenderCore::EncodedCommand SenderCore::encode_row(std::size_t row) const {
     append_message(&encoded, 0x0E, value1);
     append_message(&encoded, 0x0F, value2);
     append_message(&encoded, 0x10, value3);
+    break;
+  case CommandType::XcmdType:
+    append_message(&encoded, 0x1E, 0x02);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::XcmdAtta:
+    append_message(&encoded, 0x1E, 0x04);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::XcmdDeca:
+    append_message(&encoded, 0x1E, 0x05);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::XcmdSust:
+    append_message(&encoded, 0x1E, 0x06);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::XcmdRele:
+    append_message(&encoded, 0x1E, 0x07);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::XcmdLeng:
+    append_message(&encoded, 0x1E, 0x0A);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::XcmdSwee:
+    append_message(&encoded, 0x1E, 0x0B);
+    append_message(&encoded, 0x1D, value0);
+    break;
+  case CommandType::Xcmd0D:
+    append_message(&encoded, 0x1E, 0x0D);
+    append_message(&encoded, 0x1D, value0);
+    append_message(&encoded, 0x1D, value1);
+    append_message(&encoded, 0x1D, value2);
+    append_message(&encoded, 0x1D, value3);
     break;
   }
 

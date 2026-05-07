@@ -326,6 +326,84 @@ void test_channel_switch_keeps_single_command_bank() {
             "switch resend preserves the configured value");
 }
 
+void test_xcmd_atta_emits_selector_and_data() {
+  SenderCore core;
+  PlannedEvents planned;
+  core.set_output_channel(0.0);
+  core.set_row_enabled(kFirstConfigurableRow, 1.0);
+  core.set_row_type(kFirstConfigurableRow,
+                    static_cast<double>(CommandType::XcmdAtta));
+  core.set_row_value(kFirstConfigurableRow, 0, 90.0);
+
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 3,
+            "xATTA snapshot emits program change, selector, and data");
+  ASSERT_EQ(planned.events[1].data1, 0x1E, "xATTA selector controller");
+  ASSERT_EQ(planned.events[1].data2, 0x04, "xATTA selector value");
+  ASSERT_EQ(planned.events[2].data1, 0x1D, "xATTA data controller");
+  ASSERT_EQ(planned.events[2].data2, 90, "xATTA data value");
+}
+
+void test_full_snapshot_with_4byte_xcmds_does_not_truncate() {
+  SenderCore core;
+  PlannedEvents planned;
+  core.set_output_channel(0.0);
+  core.set_program(64.0);
+  core.set_program_enabled(1.0);
+
+  // Fixed rows (4) emit 1 CC each.
+  for (std::size_t row = 0; row < kFirstConfigurableRow; ++row)
+    core.set_row_enabled(row, 1.0);
+
+  // All 12 configurable rows = XCMD 0D (5 messages each).
+  for (std::size_t row = kFirstConfigurableRow; row < ccomidi::kMaxCommandRows;
+       ++row) {
+    core.set_row_enabled(row, 1.0);
+    core.set_row_type(row, static_cast<double>(CommandType::Xcmd0D));
+    core.set_row_value(row, 0, static_cast<double>(row));
+    core.set_row_value(row, 1, 0x22);
+    core.set_row_value(row, 2, 0x33);
+    core.set_row_value(row, 3, 0x44);
+  }
+
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+
+  // 1 program change + 4 fixed (1 each) + 12 Xcmd0D (5 each) = 65.
+  ASSERT_EQ(planned.count, 65,
+            "full snapshot with 4-byte xCmds emits every byte");
+  ASSERT_EQ(planned.events[0].status & 0xF0, 0xC0,
+            "snapshot leads with program change");
+  // Last byte must be the final Xcmd0D payload byte (0x44), not truncated.
+  ASSERT_EQ(planned.events[planned.count - 1].data1, 0x1D,
+            "last event is a payload byte");
+  ASSERT_EQ(planned.events[planned.count - 1].data2, 0x44,
+            "last payload byte survives without truncation");
+}
+
+void test_xcmd_0d_emits_four_data_bytes() {
+  SenderCore core;
+  PlannedEvents planned;
+  core.set_output_channel(0.0);
+  core.set_row_enabled(kFirstConfigurableRow, 1.0);
+  core.set_row_type(kFirstConfigurableRow,
+                    static_cast<double>(CommandType::Xcmd0D));
+  core.set_row_value(kFirstConfigurableRow, 0, 0x11);
+  core.set_row_value(kFirstConfigurableRow, 1, 0x22);
+  core.set_row_value(kFirstConfigurableRow, 2, 0x33);
+  core.set_row_value(kFirstConfigurableRow, 3, 0x44);
+
+  core.process_block(TransportState{true}, nullptr, 0, &planned);
+  ASSERT_EQ(planned.count, 6,
+            "XCMD 0D snapshot emits program change, selector, and 4 data bytes");
+  ASSERT_EQ(planned.events[1].data1, 0x1E, "XCMD 0D selector controller");
+  ASSERT_EQ(planned.events[1].data2, 0x0D, "XCMD 0D selector value");
+  ASSERT_EQ(planned.events[2].data1, 0x1D, "XCMD 0D byte0 controller");
+  ASSERT_EQ(planned.events[2].data2, 0x11, "XCMD 0D byte0 value");
+  ASSERT_EQ(planned.events[3].data2, 0x22, "XCMD 0D byte1 value");
+  ASSERT_EQ(planned.events[4].data2, 0x33, "XCMD 0D byte2 value");
+  ASSERT_EQ(planned.events[5].data2, 0x44, "XCMD 0D byte3 value");
+}
+
 void test_configurable_rows_reject_fixed_command_types() {
   SenderCore core;
 
@@ -350,6 +428,9 @@ int main() {
   test_fixed_rows_reject_type_changes();
   test_channel_switch_keeps_single_command_bank();
   test_configurable_rows_reject_fixed_command_types();
+  test_xcmd_atta_emits_selector_and_data();
+  test_xcmd_0d_emits_four_data_bytes();
+  test_full_snapshot_with_4byte_xcmds_does_not_truncate();
 
   std::printf("Passed %d/%d tests\n", g_testsPassed, g_testsRun);
   return g_testsPassed == g_testsRun ? EXIT_SUCCESS : EXIT_FAILURE;

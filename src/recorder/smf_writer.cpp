@@ -68,17 +68,18 @@ bool write_smf1(const std::string &path,
     midifile.addTrackName(kConductorTrack, 0, "Conductor");
     midifile.addTimeSignature(kConductorTrack, 0, 4, 4);
 
+    int loopStartTick = 0;
     if (snapshot.hasLoop) {
-      //  if the snapshot has a loop, emit addMarker("[") and addMarker("]") on the conductor track. 
+      //  if the snapshot has a loop, emit addMarker("[") and addMarker("]") on the conductor track.
       const double loopBpm =
           !snapshot.tempo.empty() && snapshot.tempo[0].bpm > 0.0
               ? snapshot.tempo[0].bpm
               : initBpm;
-      const int startTick = ticks_for_sample(snapshot.loopStartSample,
-                                             sampleRate, loopBpm, ppq);
+      loopStartTick = ticks_for_sample(snapshot.loopStartSample, sampleRate,
+                                       loopBpm, ppq);
       const int endTick =
           ticks_for_sample(snapshot.loopEndSample, sampleRate, loopBpm, ppq);
-      midifile.addMarker(kConductorTrack, startTick, "[");
+      midifile.addMarker(kConductorTrack, loopStartTick, "[");
       midifile.addMarker(kConductorTrack, endTick, "]");
     }
 
@@ -110,6 +111,31 @@ bool write_smf1(const std::string &path,
     for (auto &row : lastCcValue)
       for (auto &v : row)
         v = -1;
+    // Per-channel last program-change value seen, -1 = no PC yet. When the
+    // iteration crosses the loop start, we re-emit each channel's latest PC
+    // at loopStartTick so the loop replays with the correct programs.
+    int lastPcValue[16];
+    for (int &v : lastPcValue)
+      v = -1;
+    bool loopPcEmitted = !snapshot.hasLoop;
+    auto emitLoopPcs = [&]() {
+      if (loopPcEmitted)
+        return;
+      loopPcEmitted = true;
+      for (int ch = 0; ch < 16; ++ch) {
+        if (lastPcValue[ch] < 0)
+          continue;
+        const int track = channelTrack[ch];
+        if (track < 0)
+          continue;
+        std::vector<uchar> bytes;
+        bytes.push_back(static_cast<uchar>(0xC0 | ch));
+        bytes.push_back(static_cast<uchar>(lastPcValue[ch]));
+        midifile.addEvent(track, loopStartTick, bytes);
+        if (loopStartTick > lastTickPerChannel[ch])
+          lastTickPerChannel[ch] = loopStartTick;
+      }
+    };
     std::size_t mi = 0;
     std::size_t ti = 0;
     while (mi < snapshot.midi.size() || ti < snapshot.tempo.size()) {
@@ -138,6 +164,8 @@ bool write_smf1(const std::string &path,
         const int track = channelTrack[channel];
         if (track < 0)
           continue;
+        if (!loopPcEmitted && m.sampleTime >= snapshot.loopStartSample)
+          emitLoopPcs();
         if ((m.status & 0xF0) == 0xB0 && m.data1 != 0x1D && m.data1 != 0x1E) {
           if (lastCcValue[channel][m.data1] == m.data2)
             continue;
@@ -153,6 +181,8 @@ bool write_smf1(const std::string &path,
         midifile.addEvent(track, tick, bytes);
         if (tick > lastTickPerChannel[channel])
           lastTickPerChannel[channel] = tick;
+        if ((m.status & 0xF0) == 0xC0)
+          lastPcValue[channel] = m.data1;
 
         const std::uint8_t kind = m.status & 0xF0;
         const std::uint16_t key =
@@ -163,6 +193,11 @@ bool write_smf1(const std::string &path,
           heldNotes.erase(key);
       }
     }
+
+    // If the loop start sits past every recorded event, the iteration above
+    // never crossed it. Emit the PC repeats now so the loop body still
+    // restores programs.
+    emitLoopPcs();
 
     for (std::uint16_t key : heldNotes) {
       const std::uint8_t channel = static_cast<std::uint8_t>((key >> 8) & 0x0F);

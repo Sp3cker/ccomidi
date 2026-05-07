@@ -24,6 +24,15 @@ double RecorderCore::sample_rate() const {
   return sampleRate_;
 }
 
+void RecorderCore::reserve(std::size_t midiCapacity,
+                           std::size_t tempoCapacity) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (midiCapacity > midi_.capacity())
+    midi_.reserve(midiCapacity);
+  if (tempoCapacity > tempo_.capacity())
+    tempo_.reserve(tempoCapacity);
+}
+
 void RecorderCore::push_event_in_block(std::uint32_t sampleInBlock,
                                        std::uint8_t status, std::uint8_t data1,
                                        std::uint8_t data2) {

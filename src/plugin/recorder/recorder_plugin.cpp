@@ -61,12 +61,6 @@ void fill_recorder_ui_snapshot(RecorderPlugin *plugin,
                                RecorderUiSnapshot *snapshot) {
   if (!plugin || !snapshot)
     return;
-  snapshot->midiEventCount = plugin->core.midi_event_count();
-  snapshot->tempoEventCount = plugin->core.tempo_event_count();
-  snapshot->durationSeconds = plugin->core.duration_seconds();
-  snapshot->lastTempoBpm = plugin->core.last_tempo_bpm();
-  snapshot->renderMode = plugin->renderMode.load();
-  snapshot->active = plugin->active.load();
   std::lock_guard<std::mutex> lock(plugin->saveMutex);
   snapshot->lastStatus = plugin->lastStatus;
   snapshot->savePath = plugin->savePath;
@@ -104,6 +98,9 @@ bool plugin_activate(const clap_plugin_t *plugin, double sampleRate,
     return false;
   self->sampleRate = sampleRate;
   self->core.set_sample_rate(sampleRate);
+  // Pre-reserve to avoid heap reallocation under the mutex on the audio
+  // thread. ~10 minutes of dense MIDI fits in 64K events.
+  self->core.reserve(65536, 1024);
   self->active.store(true);
   return true;
 }
@@ -197,6 +194,18 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
 
   if (isPlaying)
     self->core.advance_block(process->frames_count);
+
+  // Zero the declared stereo audio output so the host receives defined
+  // silence. See audio_ports_count for why the bus exists.
+  if (process->audio_outputs && process->audio_outputs_count > 0) {
+    const clap_audio_buffer_t &out = process->audio_outputs[0];
+    for (std::uint32_t ch = 0; ch < out.channel_count; ++ch) {
+      if (out.data32 && out.data32[ch])
+        std::memset(out.data32[ch], 0, sizeof(float) * process->frames_count);
+      if (out.data64 && out.data64[ch])
+        std::memset(out.data64[ch], 0, sizeof(double) * process->frames_count);
+    }
+  }
   return CLAP_PROCESS_CONTINUE;
 }
 
@@ -395,17 +404,25 @@ const clap_plugin_gui_t s_gui = {
 
 std::uint32_t audio_ports_count(const clap_plugin_t *plugin, bool isInput) {
   (void)plugin;
-  (void)isInput;
-  return 0;
+  // Ableton rejects VST3 plugins without an audio output bus. Declare a
+  // stereo output; `plugin_process` writes silence to it. MIDI still flows
+  // through the event buses.
+  return isInput ? 0u : 1u;
 }
 
 bool audio_ports_get(const clap_plugin_t *plugin, std::uint32_t index,
                      bool isInput, clap_audio_port_info_t *info) {
   (void)plugin;
-  (void)index;
-  (void)isInput;
-  (void)info;
-  return false;
+  if (isInput || index != 0 || !info)
+    return false;
+  std::memset(info, 0, sizeof(*info));
+  info->id = 0;
+  std::snprintf(info->name, sizeof(info->name), "%s", "Audio Output");
+  info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+  info->channel_count = 2;
+  info->port_type = CLAP_PORT_STEREO;
+  info->in_place_pair = CLAP_INVALID_ID;
+  return true;
 }
 
 const clap_plugin_audio_ports_t s_audioPorts = {

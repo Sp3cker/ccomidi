@@ -35,6 +35,7 @@ public:
   void reset();
   void set_sample_rate(double sampleRate);
   double sample_rate() const;
+  void reserve(std::size_t midiCapacity, std::size_t tempoCapacity);
 
   void push_event_in_block(std::uint32_t sampleInBlock, std::uint8_t status,
                            std::uint8_t data1, std::uint8_t data2);

@@ -13,12 +13,8 @@ namespace ccomidi {
 namespace {
 
 constexpr std::uint32_t kDefaultWidth = 640;
-constexpr std::uint32_t kDefaultHeight = 360;
+constexpr std::uint32_t kDefaultHeight = 220;
 constexpr std::size_t kPathBufferSize = 512;
-
-const char *render_mode_label(std::int32_t mode) {
-  return mode == CLAP_RENDER_OFFLINE ? "offline" : "realtime";
-}
 
 } // namespace
 
@@ -68,17 +64,6 @@ void draw_frame(void *userData, std::uint32_t width, std::uint32_t height) {
   ImGui::TextDisabled("MIDI capture to SMF Type 1");
   ImGui::Separator();
 
-  ImGui::Text("State: %s  |  Render: %s", snapshot.active ? "active" : "idle",
-              render_mode_label(snapshot.renderMode));
-  ImGui::Text("MIDI events: %zu", snapshot.midiEventCount);
-  ImGui::Text("Tempo events: %zu", snapshot.tempoEventCount);
-  ImGui::Text("Duration: %.3f s", snapshot.durationSeconds);
-  if (snapshot.lastTempoBpm > 0.0)
-    ImGui::Text("Last tempo: %.2f BPM", snapshot.lastTempoBpm);
-  else
-    ImGui::TextDisabled("Last tempo: (none observed)");
-
-  ImGui::Spacing();
   ImGui::TextUnformatted("Output file");
   ImGui::SetNextItemWidth(-1.0f);
   if (ImGui::InputText("##path", editor->pathBuffer, sizeof(editor->pathBuffer)))

@@ -35,12 +35,6 @@ void request_recorder_save(RecorderPlugin *plugin, const std::string &path);
 void request_recorder_clear(RecorderPlugin *plugin);
 
 struct RecorderUiSnapshot {
-  std::size_t midiEventCount = 0;
-  std::size_t tempoEventCount = 0;
-  double durationSeconds = 0.0;
-  double lastTempoBpm = 0.0;
-  std::int32_t renderMode = CLAP_RENDER_REALTIME;
-  bool active = false;
   std::string lastStatus;
   std::string savePath;
 };

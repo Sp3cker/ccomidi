@@ -101,7 +101,7 @@ const char *command_field_name(CommandType type, std::uint32_t field) {
     break;
   }
 
-  const auto &fieldName = command_spec(type);
+  (void)command_spec(type);  // reserved for future multi-param naming
   // When not a multi-param cc AND
   switch (field) {
   case 0:
@@ -205,11 +205,54 @@ void apply_ui_param_change(Plugin *plugin, clap_id paramId, double value) {
     for (std::size_t row = 0; row < kMaxCommandRows; ++row)
       plugin->pendingUiRowChanged[row] =
           plugin->pendingUiRowChanged[row] || rowChanged[row];
+    plugin->pendingUiParamEvents.emplace_back(paramId, value);
     if (should_rescan_param_info(address))
       schedule_param_info_rescan(plugin);
   }
 
   request_host_param_sync(plugin);
+}
+
+void emit_pending_ui_param_events(Plugin *plugin,
+                                  const clap_output_events_t *out) {
+  if (!plugin || !out)
+    return;
+
+  std::vector<std::pair<clap_id, double>> events;
+  {
+    std::lock_guard<std::mutex> lock(plugin->stateMutex);
+    events.swap(plugin->pendingUiParamEvents);
+  }
+
+  for (const auto &[paramId, value] : events) {
+    clap_event_param_gesture_t begin = {};
+    begin.header.size = sizeof(begin);
+    begin.header.time = 0;
+    begin.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+    begin.header.type = CLAP_EVENT_PARAM_GESTURE_BEGIN;
+    begin.header.flags = 0;
+    begin.param_id = paramId;
+    out->try_push(out, &begin.header);
+
+    clap_event_param_value_t valueEvent = {};
+    valueEvent.header.size = sizeof(valueEvent);
+    valueEvent.header.time = 0;
+    valueEvent.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+    valueEvent.header.type = CLAP_EVENT_PARAM_VALUE;
+    valueEvent.header.flags = 0;
+    valueEvent.param_id = paramId;
+    valueEvent.cookie = nullptr;
+    valueEvent.note_id = -1;
+    valueEvent.port_index = -1;
+    valueEvent.channel = -1;
+    valueEvent.key = -1;
+    valueEvent.value = value;
+    out->try_push(out, &valueEvent.header);
+
+    clap_event_param_gesture_t end = begin;
+    end.header.type = CLAP_EVENT_PARAM_GESTURE_END;
+    out->try_push(out, &end.header);
+  }
 }
 
 double get_param_value(const Plugin *plugin, clap_id paramId, bool *ok) {
@@ -621,6 +664,7 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
   }
 
   push_planned_events(pendingUiEvents, 0, process->out_events);
+  emit_pending_ui_param_events(self, process->out_events);
 
   std::uint8_t activeOutputChannel = 0;
   {
@@ -744,6 +788,18 @@ clap_process_status plugin_process(const clap_plugin_t *plugin,
   }
 
   flush_slice(process->frames_count, currentPlaying);
+
+  // Zero the declared stereo audio output so the host receives defined
+  // silence. See audio_ports_count for why the bus exists.
+  if (process->audio_outputs && process->audio_outputs_count > 0) {
+    const clap_audio_buffer_t &out = process->audio_outputs[0];
+    for (std::uint32_t ch = 0; ch < out.channel_count; ++ch) {
+      if (out.data32 && out.data32[ch])
+        std::memset(out.data32[ch], 0, sizeof(float) * process->frames_count);
+      if (out.data64 && out.data64[ch])
+        std::memset(out.data64[ch], 0, sizeof(double) * process->frames_count);
+    }
+  }
   return CLAP_PROCESS_CONTINUE;
 }
 
@@ -949,17 +1005,26 @@ const clap_plugin_gui_t s_gui = {
 
 std::uint32_t audio_ports_count(const clap_plugin_t *plugin, bool isInput) {
   (void)plugin;
-  (void)isInput;
-  return 0;
+  // Ableton (and several other VST3 hosts) reject plugins without an audio
+  // output bus. We're a MIDI effect — we don't produce audio — but we
+  // declare a stereo output and write silence into it so the host will load
+  // us. The MIDI output bus still carries the transformed events downstream.
+  return isInput ? 0u : 1u;
 }
 
 bool audio_ports_get(const clap_plugin_t *plugin, std::uint32_t index,
                      bool isInput, clap_audio_port_info_t *info) {
   (void)plugin;
-  (void)index;
-  (void)isInput;
-  (void)info;
-  return false;
+  if (isInput || index != 0 || !info)
+    return false;
+  std::memset(info, 0, sizeof(*info));
+  info->id = 0;
+  std::snprintf(info->name, sizeof(info->name), "%s", "Audio Output");
+  info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+  info->channel_count = 2;
+  info->port_type = CLAP_PORT_STEREO;
+  info->in_place_pair = CLAP_INVALID_ID;
+  return true;
 }
 
 const clap_plugin_audio_ports_t s_audioPorts = {
@@ -996,6 +1061,26 @@ std::uint32_t params_count(const clap_plugin_t *plugin) {
   return total_param_count();
 }
 
+// DAW-visible display order. clap_ids are kept stable so saved sessions stay
+// compatible; this table only re-orders how the host enumerates them, pulling
+// Program (PC number) and every row's Value0 ("amount") knob to the top and
+// pushing the stepped Enabled/Type slots to the bottom.
+// Layout: 16 rows × 6 slots + 3 globals = 99 entries.
+static_assert(kMaxCommandRows == 16,
+              "param display table assumes 16 command rows");
+static_assert(total_param_count() == 99,
+              "param display table assumes 99 total params");
+
+constexpr clap_id kParamDisplayOrder[99] = {
+    0,  97, 98,                                                  // globals
+    3,  9,  15, 21, 27, 33, 39, 45, 51, 57, 63, 69, 75, 81, 87,  93,  // Value0
+    4,  10, 16, 22, 28, 34, 40, 46, 52, 58, 64, 70, 76, 82, 88,  94,  // Value1
+    5,  11, 17, 23, 29, 35, 41, 47, 53, 59, 65, 71, 77, 83, 89,  95,  // Value2
+    6,  12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90,  96,  // Value3
+    1,  7,  13, 19, 25, 31, 37, 43, 49, 55, 61, 67, 73, 79, 85,  91,  // Enabled
+    2,  8,  14, 20, 26, 32, 38, 44, 50, 56, 62, 68, 74, 80, 86,  92,  // Type
+};
+
 bool params_get_info(const clap_plugin_t *plugin, std::uint32_t paramIndex,
                      clap_param_info_t *info) {
   if (!info || paramIndex >= total_param_count())
@@ -1003,7 +1088,7 @@ bool params_get_info(const clap_plugin_t *plugin, std::uint32_t paramIndex,
 
   Plugin *self = from_plugin(plugin);
   std::lock_guard<std::mutex> lock(self->stateMutex);
-  describe_param(self, static_cast<clap_id>(paramIndex), info);
+  describe_param(self, kParamDisplayOrder[paramIndex], info);
   return true;
 }
 
@@ -1200,6 +1285,7 @@ void params_flush(const clap_plugin_t *plugin, const clap_input_events_t *in,
   }
 
   push_planned_events(planned, 0, out);
+  emit_pending_ui_param_events(self, out);
 }
 
 const clap_plugin_params_t s_params = {
@@ -1399,7 +1485,7 @@ const clap_plugin_factory_t s_factory = {
 };
 
 bool entry_init(const char *pluginPath) {
-  voicegroup_bridge_set_plugin_path(pluginPath);
+  (void)pluginPath;
   return true;
 }
 

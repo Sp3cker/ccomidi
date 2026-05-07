@@ -3,6 +3,7 @@
 
 #include <array>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include <clap/clap.h>
@@ -38,6 +39,10 @@ struct Plugin {
   bool pendingUiChannelChange = false;
   bool pendingUiProgramChange = false;
   std::array<bool, kMaxCommandRows> pendingUiRowChanged = {};
+  // GUI knob tweaks queued for emission as CLAP param events so the host
+  // (e.g. FL Studio's "Last Tweaked Parameter") learns which param the user
+  // touched. Drained from params.flush and process.
+  std::vector<std::pair<clap_id, double>> pendingUiParamEvents = {};
   bool pendingParamInfoRescan = false;
   VoiceSlotLoad voiceLoad = {};
 };

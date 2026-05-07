@@ -18,16 +18,17 @@ struct VoiceSlotLoad {
   long long mtimeNs = 0;   // mtime of state file when parsed, 0 if not found
 };
 
-// Records the .clap bundle path (from entry_init's pluginPath) so later
-// bridge calls can find poryaaaa_state.json next to the bundle.
-void voicegroup_bridge_set_plugin_path(const char *pluginPath);
-
-// Returns the current mtime of state.json in ns (0 if not found). Fast
+// Returns the current mtime of the state file in ns (0 if not found). Fast
 // (single stat). Use to decide whether to call load_state().
+//
+// The state file lives at a fixed per-user location (on macOS:
+// `~/Library/Application Support/poryaaaa/state.json`) so that it works
+// across CLAP and VST3 installations without knowing where the plugin
+// bundle was placed.
 long long voicegroup_bridge_state_mtime();
 
-// Reads poryaaaa_state.json and returns the parsed load. On failure, `slots`
-// is empty and `error` describes the problem.
+// Reads the state file and returns the parsed load. On failure, `slots` is
+// empty and `error` describes the problem.
 VoiceSlotLoad voicegroup_bridge_load_state();
 
 }  // namespace ccomidi

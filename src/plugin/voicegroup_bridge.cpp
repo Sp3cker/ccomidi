@@ -11,37 +11,26 @@ namespace ccomidi {
 
 namespace {
 
-std::string g_pluginDir;
-
-std::string dirname_of(const char *path) {
-  const char *end = path + std::strlen(path);
-  while (end > path && *end != '/' && *end != '\\')
-    --end;
-  return std::string(path, static_cast<size_t>(end - path));
-}
-
-void strip_bundle_path(std::string &dir) {
-#ifdef __APPLE__
-  // plugin_path points at <bundle>.vst3/Contents/MacOS/<binary>; walk up two
-  // levels to reach the dir that holds sibling .vst3 bundles.
-  static const char kSuffix[] = "/Contents/MacOS";
-  const size_t slen = sizeof(kSuffix) - 1;
-  if (dir.size() > slen &&
-      dir.compare(dir.size() - slen, slen, kSuffix) == 0) {
-    dir.resize(dir.size() - slen);
-    auto pos = dir.find_last_of('/');
-    if (pos != std::string::npos)
-      dir.resize(pos);
-  }
-#else
-  (void)dir;
-#endif
-}
-
+// Fixed per-user location, independent of whether poryaaaa/ccomidi were
+// installed as CLAP, VST3, etc. Both plugins must agree on this path.
 std::string state_path() {
-  if (g_pluginDir.empty())
+  const char *home = std::getenv("HOME");
+  if (!home || !*home)
     return {};
-  return g_pluginDir + "/poryaaaa_state.json";
+#ifdef __APPLE__
+  return std::string(home) +
+         "/Library/Application Support/poryaaaa/state.json";
+#elif defined(_WIN32)
+  const char *appdata = std::getenv("APPDATA");
+  if (appdata && *appdata)
+    return std::string(appdata) + "\\poryaaaa\\state.json";
+  return std::string(home) + "\\AppData\\Roaming\\poryaaaa\\state.json";
+#else
+  const char *xdg = std::getenv("XDG_CONFIG_HOME");
+  if (xdg && *xdg)
+    return std::string(xdg) + "/poryaaaa/state.json";
+  return std::string(home) + "/.config/poryaaaa/state.json";
+#endif
 }
 
 long long mtime_ns(const std::string &path) {
@@ -118,13 +107,6 @@ bool read_file_to_string(const std::string &path, std::string &out) {
 
 }  // namespace
 
-void voicegroup_bridge_set_plugin_path(const char *pluginPath) {
-  if (!pluginPath || !*pluginPath)
-    return;
-  g_pluginDir = dirname_of(pluginPath);
-  strip_bundle_path(g_pluginDir);
-}
-
 long long voicegroup_bridge_state_mtime() {
   return mtime_ns(state_path());
 }
@@ -132,12 +114,12 @@ long long voicegroup_bridge_state_mtime() {
 VoiceSlotLoad voicegroup_bridge_load_state() {
   VoiceSlotLoad result;
 
-  if (g_pluginDir.empty()) {
-    result.error = "Plugin directory unknown — CLAP host never called entry_init.";
+  result.statePath = state_path();
+  if (result.statePath.empty()) {
+    result.error = "Can't resolve state path — $HOME is not set.";
     return result;
   }
 
-  result.statePath = state_path();
   result.mtimeNs = mtime_ns(result.statePath);
   if (result.mtimeNs == 0) {
     result.error = "poryaaaa hasn't written its state yet — load poryaaaa in the DAW.";
@@ -146,7 +128,7 @@ VoiceSlotLoad voicegroup_bridge_load_state() {
 
   std::string body;
   if (!read_file_to_string(result.statePath, body)) {
-    result.error = "Could not read poryaaaa_state.json.";
+    result.error = "Could not read state.json.";
     return result;
   }
 

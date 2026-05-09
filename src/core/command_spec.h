@@ -53,13 +53,18 @@ inline constexpr std::array<CommandSpec, 23> kCommandSpecs = {{
   // XcmdType = 15 (selector 0x02)
   {"xTYPE",       1, {{{"Type",      0, 127,  0}}}},
   // XcmdAtta = 16 (selector 0x04)
-  {"xATTA",       1, {{{"Attack",    0, 127,  0}}}},
+  // ADSR XCMDs carry the GBA ToneData byte directly. DirectSound uses the
+  // full 0..255 (musical max 254 — 0xFF reserved). CGB voices (square /
+  // wave / noise) take attack/decay/release as 3-bit and sustain as 4-bit;
+  // the engine masks them down internally, so the dial range can stay wide
+  // here without distorting CGB voices' actual behavior.
+  {"xATTA",       1, {{{"Attack",    0, 254,  0}}}},
   // XcmdDeca = 17 (selector 0x05)
-  {"xDECA",       1, {{{"Decay",     0, 127,  0}}}},
+  {"xDECA",       1, {{{"Decay",     0, 254,  0}}}},
   // XcmdSust = 18 (selector 0x06)
-  {"xSUST",       1, {{{"Sustain",   0, 127,  0}}}},
+  {"xSUST",       1, {{{"Sustain",   0, 254,  0}}}},
   // XcmdRele = 19 (selector 0x07)
-  {"xRELE",       1, {{{"Release",   0, 127,  0}}}},
+  {"xRELE",       1, {{{"Release",   0, 254,  0}}}},
   // XcmdLeng = 20 (selector 0x0A)
   {"xLENG",       1, {{{"Length",    0, 127,  0}}}},
   // XcmdSwee = 21 (selector 0x0B)

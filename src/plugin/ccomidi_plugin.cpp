@@ -190,6 +190,7 @@ void apply_ui_param_change(Plugin *plugin, clap_id paramId, double value) {
   if (!decode_param_id(paramId, &address))
     return;
 
+  bool needRescanInfo = false;
   {
     std::lock_guard<std::mutex> lock(plugin->stateMutex);
     std::array<bool, kMaxCommandRows> rowChanged = {};
@@ -206,10 +207,17 @@ void apply_ui_param_change(Plugin *plugin, clap_id paramId, double value) {
       plugin->pendingUiRowChanged[row] =
           plugin->pendingUiRowChanged[row] || rowChanged[row];
     plugin->pendingUiParamEvents.emplace_back(paramId, value);
-    if (should_rescan_param_info(address))
-      schedule_param_info_rescan(plugin);
+    if (should_rescan_param_info(address)) {
+      plugin->pendingParamInfoRescan = true;
+      needRescanInfo = true;
+    }
   }
 
+  // Host callbacks run outside stateMutex: Bitwig may dispatch
+  // request_callback / rescan synchronously, which calls back into
+  // params_get_info and re-acquires stateMutex on this thread.
+  if (needRescanInfo && plugin->host && plugin->host->request_callback)
+    plugin->host->request_callback(plugin->host);
   request_host_param_sync(plugin);
 }
 
@@ -1252,6 +1260,7 @@ void params_flush(const clap_plugin_t *plugin, const clap_input_events_t *in,
 
   bool channelChanged = false;
   bool programChanged = false;
+  bool needRescanInfo = false;
   std::array<bool, kMaxCommandRows> rowChanged = {};
   PlannedEvents planned = {};
   {
@@ -1276,14 +1285,18 @@ void params_flush(const clap_plugin_t *plugin, const clap_input_events_t *in,
           &rowChanged, &localProgramChanged);
       channelChanged = channelChanged || localChannelChanged;
       programChanged = programChanged || localProgramChanged;
-      if (should_rescan_param_info(address))
-        schedule_param_info_rescan(self);
+      if (should_rescan_param_info(address)) {
+        self->pendingParamInfoRescan = true;
+        needRescanInfo = true;
+      }
     }
 
     self->core.emit_preapplied_changes(false, channelChanged, rowChanged, 0,
                                        &planned, programChanged);
   }
 
+  if (needRescanInfo && self->host && self->host->request_callback)
+    self->host->request_callback(self->host);
   push_planned_events(planned, 0, out);
   emit_pending_ui_param_events(self, out);
 }
@@ -1379,36 +1392,40 @@ bool state_load(const clap_plugin_t *plugin, const clap_istream_t *stream) {
       return false;
   }
 
-  std::lock_guard<std::mutex> lock(self->stateMutex);
-  self->core.reset();
-  self->core.set_output_channel(outputChannel);
-  self->core.set_program(program);
-  self->core.set_program_enabled(programEnabled);
+  {
+    std::lock_guard<std::mutex> lock(self->stateMutex);
+    self->core.reset();
+    self->core.set_output_channel(outputChannel);
+    self->core.set_program(program);
+    self->core.set_program_enabled(programEnabled);
 
-  if (version == kStateVersion || version == 4 || version == 3) {
-    for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
-      double values[6] = {};
-      if (!read_row_state(stream, values))
-        return false;
-      apply_row_state(&self->core, row, values);
-    }
-  } else {
-    const std::size_t selectedChannel = quantize_channel(outputChannel);
-    for (std::size_t channel = 0; channel < kMidiChannelCount; ++channel) {
+    if (version == kStateVersion || version == 4 || version == 3) {
       for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
         double values[6] = {};
         if (!read_row_state(stream, values))
           return false;
-        if (channel == selectedChannel)
-          apply_row_state(&self->core, row, values);
+        apply_row_state(&self->core, row, values);
+      }
+    } else {
+      const std::size_t selectedChannel = quantize_channel(outputChannel);
+      for (std::size_t channel = 0; channel < kMidiChannelCount; ++channel) {
+        for (std::size_t row = 0; row < kMaxCommandRows; ++row) {
+          double values[6] = {};
+          if (!read_row_state(stream, values))
+            return false;
+          if (channel == selectedChannel)
+            apply_row_state(&self->core, row, values);
+        }
       }
     }
+
+    if (self->active)
+      self->core.reset_runtime_state();
+    self->pendingParamInfoRescan = true;
   }
 
-  if (self->active)
-    self->core.reset_runtime_state();
-  schedule_param_info_rescan(self);
-
+  if (self->host && self->host->request_callback)
+    self->host->request_callback(self->host);
   return true;
 }
 

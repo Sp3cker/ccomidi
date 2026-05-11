@@ -55,6 +55,22 @@ else()
     list(APPEND IMGUI_SOURCES ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
 endif()
 
+# ---- IPC: PC sidechannel ----
+# POSIX-shm-backed bus that ccomidi publishes Program Change events into and
+# the recorder embedded in poryaaaa.clap reads. Bypasses host MIDI routing
+# fidelity for PC, which Live/clap-wrapper/etc. variously drop.
+add_library(ccomidi_ipc STATIC
+    src/ipc/pc_bus.cpp
+)
+
+target_include_directories(ccomidi_ipc PUBLIC
+    src
+)
+
+set_target_properties(ccomidi_ipc PROPERTIES
+    POSITION_INDEPENDENT_CODE TRUE
+)
+
 add_library(ccomidi_core
     src/core/sender_core.cpp
 )
@@ -114,6 +130,7 @@ add_library(ccomidi MODULE
 target_link_libraries(ccomidi PRIVATE
     ccomidi_core
     ccomidi_gui
+    ccomidi_ipc
 )
 
 if(APPLE)
@@ -138,69 +155,7 @@ if(APPLE)
     )
 endif()
 
-set(MIDIFILE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/midifile")
-
-add_library(midifile STATIC
-    ${MIDIFILE_DIR}/src/MidiFile.cpp
-    ${MIDIFILE_DIR}/src/MidiEvent.cpp
-    ${MIDIFILE_DIR}/src/MidiEventList.cpp
-    ${MIDIFILE_DIR}/src/MidiMessage.cpp
-    ${MIDIFILE_DIR}/src/Binasc.cpp
-    ${MIDIFILE_DIR}/src/Options.cpp
-)
-
-target_include_directories(midifile PUBLIC
-    ${MIDIFILE_DIR}/include
-)
-
-add_library(ccomidi_recorder_core STATIC
-    src/recorder/recorder_core.cpp
-    src/recorder/smf_writer.cpp
-)
-
-target_include_directories(ccomidi_recorder_core PUBLIC
-    src
-)
-
-target_link_libraries(ccomidi_recorder_core PRIVATE
-    midifile
-)
-
-add_executable(ccomidi_recorder_tests
-    src/tests/test_recorder_smf.cpp
-)
-
-target_link_libraries(ccomidi_recorder_tests PRIVATE
-    ccomidi_recorder_core
-    midifile
-)
-
-add_library(ccomidi_recorder MODULE
-    src/plugin/recorder/recorder_plugin.cpp
-    src/plugin/recorder/recorder_editor.cpp
-)
-
-target_link_libraries(ccomidi_recorder PRIVATE
-    ccomidi_recorder_core
-    ccomidi_gui
-    clap
-)
-
-if(APPLE)
-    set_target_properties(ccomidi_recorder PROPERTIES
-        BUNDLE TRUE
-        BUNDLE_EXTENSION "clap"
-    )
-    add_custom_command(TARGET ccomidi_recorder POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/recorder/Info.plist"
-            "$<TARGET_BUNDLE_CONTENT_DIR:ccomidi_recorder>/Info.plist"
-        COMMAND codesign -f -s - "$<TARGET_BUNDLE_DIR:ccomidi_recorder>"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf
-            "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_BUNDLE_DIR:ccomidi_recorder>"
-            "${CLAP_INSTALL_DIR}/ccomidi_recorder.clap"
-    )
-endif()
-
+# Recorder migrated to poryaaaa. midifile + recorder_core + tests now live
+# in ../poryaaaa/{plugin/recorder,third_party/midifile,test}/. ccomidi only
+# publishes PC events into the IPC bus above; the recorder is embedded in
+# poryaaaa.clap and consumes the bus.

@@ -9,6 +9,7 @@
 #include <clap/clap.h>
 
 #include "core/sender_core.h"
+#include "ipc/pc_bus.h"
 #include "plugin/voicegroup_bridge.h"
 
 namespace ccomidi {
@@ -45,6 +46,9 @@ struct Plugin {
   std::vector<std::pair<clap_id, double>> pendingUiParamEvents = {};
   bool pendingParamInfoRescan = false;
   VoiceSlotLoad voiceLoad = {};
+  // PC sidechannel writer. Opened in plugin_activate; survives across the
+  // plugin's lifetime. publish() is RT-safe.
+  ipc::PCBus pcBus = {};
 };
 
 const char *command_type_name(CommandType type);
